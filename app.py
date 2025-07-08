@@ -7,7 +7,7 @@ import os
 from transformers import pipeline
 
 # Load fine-tuned BERT model
-classifier = pipeline("text-classification", model="./bert-template-classifier", tokenizer="./bert-template-classifier")
+classifier = pipeline("text-classification", model="ppericles/bert-template-classifier")
 
 # Feedback CSV
 FEEDBACK_FILE = "feedback_data.csv"
