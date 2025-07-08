@@ -31,7 +31,7 @@ def extract_text_google_vision(uploaded_file):
     image_context = vision.ImageContext(language_hints=["el"])  # Greek language hint
 
     try:
-        response = client.text_detection(image=image, image_context=image_context)
+        response = client.text_detection(image=image)
         return response.text_annotations[0].description if response.text_annotations else "No text found"
     except Exception as e:
         return f"❌ Vision API error: {e}"
