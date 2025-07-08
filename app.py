@@ -5,6 +5,23 @@ from google.cloud import vision
 from google.oauth2 import service_account
 import io
 
+def correct_greek_misreads(text):
+    substitutions = {
+        "P": "Ρ",  # Latin P → Greek Rho
+        "H": "Η",  # Latin H → Greek Eta
+        "N": "Ν",  # Latin N → Greek Nu
+        "A": "Α",  # Latin A → Greek Alpha
+        "B": "Β",  # Latin B → Greek Beta
+        "E": "Ε",  # Latin E → Greek Epsilon
+        "T": "Τ",  # Latin T → Greek Tau
+        "X": "Χ",  # Latin X → Greek Chi
+        "Y": "Υ",  # Latin Y → Greek Upsilon
+        "M": "Μ",  # Latin M → Greek Mu
+    }
+    for latin, greek in substitutions.items():
+        text = text.replace(latin, greek)
+    return text
+
 from PIL import ImageEnhance, ImageOps
 
 def preprocess_image(uploaded_file):
@@ -50,7 +67,8 @@ if uploaded_file:
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
     # OCR
-    text = extract_text_google_vision(uploaded_file)
+    raw_text = extract_text_google_vision(uploaded_file)
+    text = correct_greek_misreads(raw_text)
     st.subheader("🧾 Extracted Text")
     st.text_area("Text", text, height=200)
 
