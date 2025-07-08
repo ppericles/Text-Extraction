@@ -16,9 +16,6 @@ def extract_text_google_vision(uploaded_file):
     response = client.document_text_detection(image=image)
     return response.full_text_annotation.text if response.full_text_annotation.text else "No text found"
 
-uploaded_file.seek(0)
-image = Image.open(uploaded_file)
-
 # Load your Hugging Face model
 classifier = pipeline("text-classification", model="ppericles/bert-template-classifier")
 
@@ -28,6 +25,7 @@ st.title("📄 Greek Handwritten Template Classifier")
 uploaded_file = st.file_uploader("Upload an image with handwritten Greek text", type=["png", "jpg", "jpeg"])
 
 if uploaded_file:
+    uploaded_file.seek(0)  # Reset file pointer before reading again
     image = Image.open(uploaded_file)
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
