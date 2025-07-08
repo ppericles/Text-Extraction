@@ -1,0 +1,6 @@
+streamlit
+pytesseract
+transformers
+torch
+pandas
+Pillow
