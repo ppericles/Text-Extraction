@@ -4,3 +4,4 @@ transformers
 torch
 pandas
 Pillow
+google-cloud-vision
