@@ -44,7 +44,17 @@ if uploaded_file:
 
     # Classification
     if text.strip():
-        prediction = classifier(text)[0]
+        # Truncate text to 512 tokens using the tokenizer
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained("ppericles/bert-template-classifier")
+
+        # Tokenize and truncate
+        tokens = tokenizer(text, truncation=True, max_length=512, return_tensors="pt")
+        truncated_text = tokenizer.decode(tokens["input_ids"][0], skip_special_tokens=True)
+
+        # Run classification
+        prediction = classifier(truncated_text)[0]
+
         st.subheader("🧠 Predicted Template")
         st.write(f"**Label:** {prediction['label']}")
         st.write(f"**Confidence:** {prediction['score']:.2f}")
