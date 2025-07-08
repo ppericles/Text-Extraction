@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageOps
+from PIL import Image
 from google.cloud import vision
 from google.oauth2 import service_account
 import io
@@ -18,29 +18,20 @@ def correct_greek_misreads(text):
         text = text.replace(latin, greek)
     return text
 
-# Preprocess image for better OCR
-def preprocess_image(uploaded_file):
-    uploaded_file.seek(0)
-    image = Image.open(uploaded_file).convert("L")
-    image = ImageOps.autocontrast(image)
-    image = image.resize((1024, int(1024 * image.height / image.width)))
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    return buffer.getvalue()
-
-# OCR function using Google Vision
+# OCR function using Google Vision (no preprocessing, no language hint)
 def extract_text_google_vision(uploaded_file):
-    content = preprocess_image(uploaded_file)
+    uploaded_file.seek(0)
+    content = uploaded_file.read()
     image = vision.Image(content=content)
-    image_context = vision.ImageContext(language_hints=["el"])
+
     try:
-        response = client.text_detection(image=image, image_context=image_context)
-        return response.text_annotations[0].description if response.text_annotations else "No text found"
+        response = client.document_text_detection(image=image)
+        return response.full_text_annotation.text if response.full_text_annotation.text else "No text found"
     except Exception as e:
         return f"❌ Vision API error: {e}"
 
 # Streamlit UI
-st.title("🧾 Greek Handwriting OCR (Google Vision)")
+st.title("🧾 Greek Handwriting OCR (Google Vision AI)")
 
 uploaded_file = st.file_uploader("Upload a handwritten Greek image", type=["png", "jpg", "jpeg"])
 
