@@ -5,6 +5,17 @@ from google.cloud import vision
 from google.oauth2 import service_account
 import io
 
+from PIL import ImageEnhance, ImageOps
+
+def preprocess_image(uploaded_file):
+    uploaded_file.seek(0)
+    image = Image.open(uploaded_file).convert("L")  # Grayscale
+    image = ImageOps.autocontrast(image)            # Enhance contrast
+    image = image.resize((1024, int(1024 * image.height / image.width)))  # Resize
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
 # Load Google Cloud credentials from Streamlit Secrets
 credentials = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"])
 client = vision.ImageAnnotatorClient(credentials=credentials)
@@ -12,7 +23,7 @@ client = vision.ImageAnnotatorClient(credentials=credentials)
 # Function to extract text using Google Vision
 def extract_text_google_vision(uploaded_file):
     uploaded_file.seek(0)
-    content = uploaded_file.read()
+    content = preprocess_image(uploaded_file)
     if not content:
         return "⚠️ Uploaded file is empty."
 
