@@ -10,11 +10,14 @@ credentials = service_account.Credentials.from_service_account_info(st.secrets["
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
 # Function to extract text using Google Vision
-def extract_text_google_vision(image_file):
-    content = image_file.read()
+def extract_text_google_vision(uploaded_file):
+    content = uploaded_file.read()  # Read the file into bytes
     image = vision.Image(content=content)
     response = client.document_text_detection(image=image)
     return response.full_text_annotation.text if response.full_text_annotation.text else "No text found"
+
+uploaded_file.seek(0)
+image = Image.open(uploaded_file)
 
 # Load your Hugging Face model
 classifier = pipeline("text-classification", model="ppericles/bert-template-classifier")
