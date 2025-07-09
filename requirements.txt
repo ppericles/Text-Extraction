@@ -1,8 +1,8 @@
-streamlit
 pytesseract
 pandas
-Pillow
-google-cloud-vision
 transformers
 torch
+streamlit
 streamlit-drawable-canvas
+google-cloud-vision
+Pillow
