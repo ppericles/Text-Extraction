@@ -26,7 +26,6 @@ def extract_forms_from_ocr(response):
             "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
         ]
 
-        # Flatten all blocks to text + position
         raw_blocks = []
         for block in page.blocks:
             text = ""
@@ -93,7 +92,7 @@ uploaded_file = st.file_uploader("📎 Upload Greek form image", type=["png", "j
 if uploaded_file:
     uploaded_file.seek(0)
     img = Image.open(uploaded_file)
-    st.image(img, caption="📷 Uploaded Image", use_column_width=True)
+    st.image(img, caption="📷 Uploaded Image", use_container_width=True)
 
     with st.spinner("🔍 Extracting form data..."):
         uploaded_file.seek(0)
@@ -126,4 +125,9 @@ if uploaded_file:
 
         r2 = st.columns(3)
         r2[0].text_input("ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_5")
-        r2[1].text_input("ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_6
+        r2[1].text_input("ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_6")
+        r2[2].text_input("ΚΑΤΟΙΚΙΑ", form["ΚΑΤΟΙΚΙΑ"], key=f"{idx}_7")
+
+        st.markdown("#### 📋 Πίνακας")
+        for i, row in enumerate(form["TABLE_ROWS"]):
+            st.text_input(f"Γραμμή {i}", row, key=f"{idx}_table_{i}")
