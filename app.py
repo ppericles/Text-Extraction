@@ -4,26 +4,25 @@ from google.cloud import vision
 from google.oauth2 import service_account
 import difflib
 
-# --- GCP Vision Client ---
+# --- Initialize Google Cloud Vision ---
 credentials = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"]
 )
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# --- OCR Parser with fuzzy spatial logic ---
+# --- OCR & Extraction Logic ---
 def extract_forms_from_ocr(response):
     forms_data = []
-
     try:
         page = response.full_text_annotation.pages[0]
         img_width = page.width or 1200
         img_height = page.height or 1600
         form_height = img_height / 3
-        x_limit = img_width * 0.5  # left half
+        x_limit = img_width * 0.5
 
         known_labels = [
-            "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ",
-            "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
+            "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
+            "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
         ]
 
         raw_blocks = []
@@ -31,7 +30,7 @@ def extract_forms_from_ocr(response):
             text = ""
             for para in block.paragraphs:
                 for word in para.words:
-                    text += ''.join(symbol.text for symbol in word.symbols) + " "
+                    text += "".join(symbol.text for symbol in word.symbols) + " "
             text = text.strip()
             if text:
                 x = sum(v.x for v in block.bounding_box.vertices) / 4
@@ -74,35 +73,35 @@ def extract_forms_from_ocr(response):
             for label in known_labels:
                 fields[label] = find_below(label)
 
-            rows = [b["text"] for b in blocks if len(b["text"].split()) >= 2]
-            fields["TABLE_ROWS"] = rows[:11]
+            fields["TABLE_ROWS"] = [b["text"] for b in blocks if len(b["text"].split()) >= 2][:11]
             forms_data.append(fields)
 
     except Exception as e:
-        forms_data = [{"error": f"❌ OCR parsing failed: {e}"}]
+        forms_data = [{"error": f"❌ OCR extraction failed: {e}"}]
 
     return forms_data
 
 # --- Streamlit UI ---
-st.set_page_config(layout="wide", page_title="Greek Form OCR")
-st.title("📄 Greek Handwriting OCR – Smart Field Extraction")
+st.set_page_config(layout="wide", page_title="Greek OCR Form Parser")
+st.title("🧾 Greek Handwriting OCR")
 
-uploaded_file = st.file_uploader("📎 Upload Greek form image", type=["png", "jpg", "jpeg"])
+uploaded_file = st.file_uploader("📎 Upload scanned Greek form", type=["png", "jpg", "jpeg"])
 
 if uploaded_file:
     uploaded_file.seek(0)
     img = Image.open(uploaded_file)
+
+    # Optional performance boost: downscale image
+    if max(img.size) > 1800:
+        img.thumbnail((1800, 1800))
+
     st.image(img, caption="📷 Uploaded Image", use_container_width=True)
 
-    with st.spinner("🔍 Extracting form data..."):
+    with st.spinner("🔍 Running OCR..."):
         uploaded_file.seek(0)
         img_bytes = uploaded_file.read()
-        if not img_bytes:
-            st.error("⚠️ Image file is empty.")
-            st.stop()
 
         image_proto = vision.Image(content=img_bytes)
-
         try:
             response = client.document_text_detection(image=image_proto)
             forms = extract_forms_from_ocr(response)
@@ -111,23 +110,23 @@ if uploaded_file:
             st.stop()
 
     for idx, form in enumerate(forms, start=1):
-        st.markdown(f"---\n## 📄 Φόρμα {idx}")
-        if "error" in form:
-            st.error(form["error"])
-            continue
+        with st.expander(f"📄 Φόρμα {idx}", expanded=(idx == 1)):
+            if "error" in form:
+                st.error(form["error"])
+                continue
 
-        r1 = st.columns(5)
-        r1[0].text_input("ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", form["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"], key=f"{idx}_0")
-        r1[1].text_input("ΕΠΩΝΥΜΟ", form["ΕΠΩΝΥΜΟ"], key=f"{idx}_1")
-        r1[2].text_input("ΚΥΡΙΟΝ ΟΝΟΜΑ", form["ΚΥΡΙΟΝ ΟΝΟΜΑ"], key=f"{idx}_2")
-        r1[3].text_input("ΟΝΟΜΑ ΠΑΤΡΟΣ", form["ΟΝΟΜΑ ΠΑΤΡΟΣ"], key=f"{idx}_3")
-        r1[4].text_input("ΟΝΟΜΑ ΜΗΤΡΟΣ", form["ΟΝΟΜΑ ΜΗΤΡΟΣ"], key=f"{idx}_4")
+            r1 = st.columns(5)
+            r1[0].text_input("ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", form["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"], key=f"{idx}_0")
+            r1[1].text_input("ΕΠΩΝΥΜΟ", form["ΕΠΩΝΥΜΟ"], key=f"{idx}_1")
+            r1[2].text_input("ΚΥΡΙΟΝ ΟΝΟΜΑ", form["ΚΥΡΙΟΝ ΟΝΟΜΑ"], key=f"{idx}_2")
+            r1[3].text_input("ΟΝΟΜΑ ΠΑΤΡΟΣ", form["ΟΝΟΜΑ ΠΑΤΡΟΣ"], key=f"{idx}_3")
+            r1[4].text_input("ΟΝΟΜΑ ΜΗΤΡΟΣ", form["ΟΝΟΜΑ ΜΗΤΡΟΣ"], key=f"{idx}_4")
 
-        r2 = st.columns(3)
-        r2[0].text_input("ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_5")
-        r2[1].text_input("ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_6")
-        r2[2].text_input("ΚΑΤΟΙΚΙΑ", form["ΚΑΤΟΙΚΙΑ"], key=f"{idx}_7")
+            r2 = st.columns(3)
+            r2[0].text_input("ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_5")
+            r2[1].text_input("ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_6")
+            r2[2].text_input("ΚΑΤΟΙΚΙΑ", form["ΚΑΤΟΙΚΙΑ"], key=f"{idx}_7")
 
-        st.markdown("#### 📋 Πίνακας")
-        for i, row in enumerate(form["TABLE_ROWS"]):
-            st.text_input(f"Γραμμή {i}", row, key=f"{idx}_table_{i}")
+            st.markdown("#### 📋 Πίνακας")
+            for i, row in enumerate(form["TABLE_ROWS"]):
+                st.text_input(f"Γραμμή {i}", row, key=f"{idx}_table_{i}")
