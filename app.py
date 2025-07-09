@@ -4,13 +4,11 @@ from google.cloud import vision
 from google.oauth2 import service_account
 from streamlit_drawable_canvas import st_canvas
 
-# --- Vision API client ---
-credentials = service_account.Credentials.from_service_account_info(
-    st.secrets["gcp_service_account"]
-)
+# --- Vision Client ---
+credentials = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"])
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# --- Default field slots (base layout for form 1)
+# --- Default layout positions (per form) ---
 default_positions = {
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ": (100, 90),
     "ΕΠΩΝΥΜΟ": (260, 90),
@@ -22,35 +20,33 @@ default_positions = {
     "ΚΑΤΟΙΚΙΑ": (740, 180),
 }
 
-# --- UI: Field Calibration Sidebar ---
-st.sidebar.markdown("## 🛠️ Field Calibration")
-
+# --- Sidebar layout tuner ---
+st.sidebar.markdown("## 🔧 Field Calibration")
 form_number = st.sidebar.selectbox("📄 Select Form", [1, 2, 3])
-field_label = st.sidebar.selectbox("📝 Field", list(default_positions.keys()))
+field_label = st.sidebar.selectbox("📝 Field Name", list(default_positions.keys()))
 
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: default_positions.copy() for i in [1, 2, 3]}
 
 curr_x, curr_y = st.session_state.form_layouts[form_number][field_label]
-x_val = st.sidebar.slider("X", 0, 1200, value=curr_x)
+x_val = st.sidebar.slider("X Position", 0, 1200, value=curr_x)
 y_val = st.sidebar.slider("Y Offset (in Form)", 0, 400, value=curr_y)
-
 st.session_state.form_layouts[form_number][field_label] = (x_val, y_val)
 
-# --- Main App UI ---
-st.set_page_config(layout="wide", page_title="Greek OCR Form Parser")
-st.title("📄 Greek Form Parser with Field Overlay Calibration")
+# --- UI ---
+st.set_page_config(layout="wide", page_title="Greek Form Field Calibrator")
+st.title("📄 OCR Form Parser with Live Field Layout Tuning")
 
-uploaded_file = st.file_uploader("📎 Upload Form Image", type=["png", "jpg", "jpeg"])
+uploaded_file = st.file_uploader("📎 Upload Greek form image", type=["png", "jpg", "jpeg"])
 if uploaded_file:
     uploaded_file.seek(0)
     img = Image.open(uploaded_file)
     if max(img.size) > 1800:
         img.thumbnail((1800, 1800))
     img_width, img_height = img.size
-    st.image(img, caption="📷 Uploaded Image", use_container_width=True)
+    st.image(img, caption="📷 Uploaded Form", use_container_width=True)
 
-    with st.spinner("🔍 OCR in progress..."):
+    with st.spinner("🔍 Running Google OCR..."):
         uploaded_file.seek(0)
         image_proto = vision.Image(content=uploaded_file.read())
         try:
@@ -59,7 +55,6 @@ if uploaded_file:
             st.error(f"OCR failed: {e}")
             st.stop()
 
-        # Build text block list
         blocks = []
         for block in response.full_text_annotation.pages[0].blocks:
             text = "".join(
@@ -73,44 +68,42 @@ if uploaded_file:
                 y = sum(v.y for v in block.bounding_box.vertices) / 4
                 blocks.append({"text": text, "x": x, "y": y})
 
-        # --- Parser & Overlay Builder ---
-        def nearest_text(blocks, cx, cy, radius=100):
-            found = [b for b in blocks if abs(b["x"] - cx) < radius and abs(b["y"] - cy) < radius]
-            if found:
-                return sorted(found, key=lambda b: (abs(b["x"] - cx) + abs(b["y"] - cy)))[0]
-            return None
-
+        form_height = img_height / 3
         forms = []
         overlays = []
-        form_height = img_height / 3
 
-        for form_idx in [1, 2, 3]:
-            base_y = (form_idx - 1) * form_height
+        for i in [1, 2, 3]:
+            base_y = (i - 1) * form_height
+            layout = st.session_state.form_layouts[i]
             blocks_in_form = [b for b in blocks if base_y <= b["y"] < base_y + form_height]
-            layout = st.session_state.form_layouts.get(form_idx, default_positions)
             fields = {}
 
             for label, (rel_x, rel_y) in layout.items():
-                cx = rel_x
-                cy = base_y + rel_y
-                match = nearest_text(blocks_in_form, cx, cy)
+                cx, cy = rel_x, base_y + rel_y
+                match = next(
+                    (b for b in blocks_in_form if abs(b["x"] - cx) < 100 and abs(b["y"] - cy) < 100),
+                    None,
+                )
                 val = match["text"] if match else ""
                 fields[label] = val
-                if match:
+                if i == form_number:
                     overlays.append({
-                        "label": f"{label}: {val}",
-                        "left": match["x"] - 60,
-                        "top": match["y"] - 20,
+                        "label": f"{label}: {val if val else '(no match)'}",
+                        "left": cx - 60,
+                        "top": cy - 20,
                         "width": 120,
                         "height": 30
                     })
 
-            rows = [b["text"] for b in blocks_in_form if b["y"] > base_y + 230 and len(b["text"].split()) >= 2][:11]
+            rows = [
+                b["text"] for b in blocks_in_form
+                if b["y"] > base_y + 230 and len(b["text"].split()) >= 2
+            ][:11]
             fields["TABLE_ROWS"] = rows
             forms.append(fields)
 
-    # --- Overlay Canvas Preview ---
-    st.markdown("### 🧭 Live Field Overlay")
+    # --- Display overlay canvas for selected form
+    st.markdown(f"### 🧭 Calibration Overlay – Φόρμα {form_number}")
     st_canvas(
         background_image=img,
         initial_drawing=overlays,
@@ -118,12 +111,12 @@ if uploaded_file:
         width=img_width,
         update_streamlit=False,
         drawing_mode="transform",
-        key="canvas_overlay"
+        key="field_overlay"
     )
 
-    # --- Display Extracted Forms ---
+    # --- Display extracted field data
     for idx, form in enumerate(forms, start=1):
-        with st.expander(f"📄 Φόρμα {idx}", expanded=(idx == 1)):
+        with st.expander(f"📄 Φόρμα {idx}", expanded=(idx == form_number)):
             r1 = st.columns(5)
             r1[0].text_input("ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", form["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"], key=f"{idx}_0")
             r1[1].text_input("ΕΠΩΝΥΜΟ", form["ΕΠΩΝΥΜΟ"], key=f"{idx}_1")
