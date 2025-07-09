@@ -3,13 +3,16 @@ from PIL import Image
 from google.cloud import vision
 from google.oauth2 import service_account
 from streamlit_drawable_canvas import st_canvas
+from streamlit_drawable_canvas.utils import image_to_url
 import json
 
-# --- Vision Client ---
-credentials = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"])
+# --- Initialize Vision Client ---
+credentials = service_account.Credentials.from_service_account_info(
+    st.secrets["gcp_service_account"]
+)
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# --- Default Layout Positions ---
+# --- Default Layout ---
 default_positions = {
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ": (100, 90),
     "ΕΠΩΝΥΜΟ": (260, 90),
@@ -21,22 +24,20 @@ default_positions = {
     "ΚΑΤΟΙΚΙΑ": (740, 180),
 }
 
-# --- Sidebar UI for Calibration ---
+# --- Sidebar Calibration ---
 st.sidebar.markdown("## 🛠️ Field Calibration")
-
 form_number = st.sidebar.selectbox("📄 Select Form", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", list(default_positions.keys()))
 
-# Initialize session layout state
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: default_positions.copy() for i in [1, 2, 3]}
 
 curr_x, curr_y = st.session_state.form_layouts[form_number][field_label]
-x_val = st.sidebar.slider("X Position", 0, 1200, value=curr_x)
+x_val = st.sidebar.slider("X", 0, 1200, value=curr_x)
 y_val = st.sidebar.slider("Y Offset (in Form)", 0, 400, value=curr_y)
 st.session_state.form_layouts[form_number][field_label] = (x_val, y_val)
 
-# --- Streamlit UI ---
+# --- App Layout ---
 st.set_page_config(layout="wide", page_title="Greek OCR Calibrator")
 st.title("📄 OCR Form Parser with Bounding Box Calibration")
 
@@ -47,6 +48,8 @@ if uploaded_file:
     if max(img.size) > 1800:
         img.thumbnail((1800, 1800))
     img_width, img_height = img.size
+
+    img_url = image_to_url(img)
     st.image(img, caption="📷 Uploaded Form", use_column_width=True)
 
     with st.spinner("🔍 OCR in progress..."):
@@ -58,7 +61,6 @@ if uploaded_file:
             st.error(f"OCR failed: {e}")
             st.stop()
 
-        # Parse blocks
         blocks = []
         for block in response.full_text_annotation.pages[0].blocks:
             text = "".join(
@@ -83,8 +85,7 @@ if uploaded_file:
             fields = {}
 
             for label, (rel_x, rel_y) in layout.items():
-                cx = rel_x
-                cy = base_y + rel_y
+                cx, cy = rel_x, base_y + rel_y
                 match = next(
                     (b for b in blocks_in_form if abs(b["x"] - cx) < 100 and abs(b["y"] - cy) < 100),
                     None,
@@ -104,10 +105,10 @@ if uploaded_file:
             fields["TABLE_ROWS"] = rows
             forms.append(fields)
 
-    # --- Canvas Overlay Display ---
+    # --- Canvas with Bounding Boxes
     st.markdown(f"### 🧭 Calibration Overlay – Φόρμα {form_number}")
     st_canvas(
-        background_image=img,
+        background_image=img_url,
         initial_drawing=overlays,
         height=img_height,
         width=img_width,
@@ -116,7 +117,7 @@ if uploaded_file:
         key="canvas_overlay"
     )
 
-    # --- Export Tuned Layout as JSON ---
+    # --- Export as JSON
     st.download_button(
         label="💾 Download Layout as JSON",
         data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
@@ -124,7 +125,7 @@ if uploaded_file:
         mime="application/json"
     )
 
-    # --- Display Parsed Data
+    # --- Display OCR Extracted Data
     for idx, form in enumerate(forms, start=1):
         with st.expander(f"📄 Φόρμα {idx}", expanded=(idx == form_number)):
             r1 = st.columns(5)
