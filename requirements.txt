@@ -5,3 +5,4 @@ Pillow
 google-cloud-vision
 transformers
 torch
+streamlit-drawable-canvas
