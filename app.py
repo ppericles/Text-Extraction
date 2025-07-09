@@ -2,15 +2,14 @@ import streamlit as st
 from PIL import Image
 from google.cloud import vision
 from google.oauth2 import service_account
-import io
 
-# --- Initialize Google Vision Client ---
+# --- GCP Vision Client ---
 credentials = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"]
 )
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# --- Parse Google Vision OCR into 3 form blocks ---
+# --- OCR Parsing Helper ---
 def extract_forms_from_ocr(response):
     forms_data = []
 
@@ -19,24 +18,27 @@ def extract_forms_from_ocr(response):
         image_height = page.height or 1000
         form_height = image_height / 3
 
+        # Step 1: Extract all block texts with center positions
         raw_blocks = []
         for block in page.blocks:
+            text = ""
             for para in block.paragraphs:
-                text = "".join(symbol.text for word in para.words for symbol in word.symbols).strip()
-                if not text:
-                    continue
-                y_center = sum(v.y for v in block.bounding_box.vertices) / 4
+                for word in para.words:
+                    text += ''.join(symbol.text for symbol in word.symbols) + " "
+            text = text.strip()
+            if text:
                 x_center = sum(v.x for v in block.bounding_box.vertices) / 4
+                y_center = sum(v.y for v in block.bounding_box.vertices) / 4
                 raw_blocks.append({"text": text, "x": x_center, "y": y_center})
 
-        # Group blocks into form regions based on Y position
+        # Step 2: Group blocks into 3 vertical form zones
         forms = {1: [], 2: [], 3: []}
         for b in raw_blocks:
             form_idx = int(b["y"] // form_height) + 1
             if 1 <= form_idx <= 3:
                 forms[form_idx].append(b)
 
-        # Heuristic field extractor
+        # Step 3: Extract fields per form
         for idx in range(1, 4):
             form_blocks = forms[idx]
             fields = {
@@ -46,60 +48,63 @@ def extract_forms_from_ocr(response):
                 "TABLE_ROWS": []
             }
 
-            for block in form_blocks:
-                txt = block["text"]
+            def find_below(label_text, x_tolerance=60, y_min=5, y_max=150):
+                label = next((b for b in form_blocks if label_text in b["text"]), None)
+                if not label:
+                    return ""
+                lx, ly = label["x"], label["y"]
+                candidates = [
+                    b for b in form_blocks
+                    if ly + y_min < b["y"] < ly + y_max and abs(b["x"] - lx) < x_tolerance
+                ]
+                if candidates:
+                    return sorted(candidates, key=lambda b: b["y"])[0]["text"]
+                return ""
 
-                if "ΜΕΡΙΔΟΣ" in txt or (txt.isdigit() and len(txt) == 6):
-                    fields["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"] = txt
-                elif fields["ΕΠΩΝΥΜΟ"] == "" and txt.isupper():
-                    fields["ΕΠΩΝΥΜΟ"] = txt
-                elif fields["ΚΥΡΙΟΝ ΟΝΟΜΑ"] == "" and txt.isupper():
-                    fields["ΚΥΡΙΟΝ ΟΝΟΜΑ"] = txt
-                elif "ΠΑΤΡΟΣ" in txt or "ΓΕΩΡΓΙΟΣ" in txt:
-                    fields["ΟΝΟΜΑ ΠΑΤΡΟΣ"] = txt
-                elif "ΜΗΤΡΟΣ" in txt or "ΕΛΕΝΗ" in txt:
-                    fields["ΟΝΟΜΑ ΜΗΤΡΟΣ"] = txt
-                elif "ΑΘΗΝΑ" in txt or "ΠΕΙΡΑΙΑΣ" in txt:
-                    fields["ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ"] = txt
-                elif txt.isdigit() and 1900 <= int(txt) <= 2025:
-                    fields["ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ"] = txt
-                elif "ΟΔΟΣ" in txt or "ΑΓ" in txt:
-                    fields["ΚΑΤΟΙΚΙΑ"] = txt
-                elif len(txt.split()) >= 2:
-                    fields["TABLE_ROWS"].append(txt)
+            # Extract fields based on vertical proximity
+            fields["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"] = find_below("ΜΕΡΙΔΟΣ")
+            fields["ΕΠΩΝΥΜΟ"] = find_below("ΕΠΩΝΥΜΟ")
+            fields["ΚΥΡΙΟΝ ΟΝΟΜΑ"] = find_below("ΚΥΡΙΟΝ")
+            fields["ΟΝΟΜΑ ΠΑΤΡΟΣ"] = find_below("ΠΑΤΡΟΣ")
+            fields["ΟΝΟΜΑ ΜΗΤΡΟΣ"] = find_below("ΜΗΤΡΟΣ")
+            fields["ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ"] = find_below("ΓΕΝΝΗΣΕΩΣ")
+            fields["ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ"] = find_below("ΕΤΟΣ")
+            fields["ΚΑΤΟΙΚΙΑ"] = find_below("ΚΑΤΟΙΚΙΑ")
 
-            fields["TABLE_ROWS"] = fields["TABLE_ROWS"][:11]
+            # Heuristically extract long blocks as table rows
+            table_rows = [b["text"] for b in form_blocks if len(b["text"].split()) >= 2]
+            fields["TABLE_ROWS"] = table_rows[:11]
+
             forms_data.append(fields)
 
     except Exception as e:
-        forms_data = [{"error": f"❌ Error parsing forms: {e}"}]
+        forms_data = [{"error": f"❌ OCR extraction failed: {e}"}]
 
     return forms_data
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="Greek Form OCR", layout="wide")
-st.title("📄 Greek Form OCR App")
+# --- Streamlit App UI ---
+st.set_page_config(layout="wide", page_title="Greek Form OCR")
+st.title("📄 Greek Handwriting OCR – Form Parser")
 
-uploaded_file = st.file_uploader("Upload handwritten Greek form image", type=["png", "jpg", "jpeg"])
+uploaded_file = st.file_uploader("📎 Upload a handwritten Greek form image", type=["png", "jpg", "jpeg"])
 
 if uploaded_file:
     uploaded_file.seek(0)
     image = Image.open(uploaded_file)
     st.image(image, caption="📷 Uploaded Image", use_column_width=True)
 
-    with st.spinner("🔍 Analyzing..."):
+    with st.spinner("🧠 Extracting form data..."):
         uploaded_file.seek(0)
         content = uploaded_file.read()
         if not content:
-            st.error("⚠️ Uploaded image is empty.")
+            st.error("⚠️ File is empty.")
             st.stop()
 
-        img = vision.Image(content=content)
-
+        image_proto = vision.Image(content=content)
         try:
-            response = client.document_text_detection(image=img)
+            response = client.document_text_detection(image=image_proto)
         except Exception as e:
-            st.error(f"❌ Vision API error: {e}")
+            st.error(f"❌ Google Vision error: {e}")
             st.stop()
 
         forms = extract_forms_from_ocr(response)
@@ -110,21 +115,21 @@ if uploaded_file:
             st.error(form["error"])
             continue
 
-        # Row 1
-        row1 = st.columns(5)
-        row1[0].text_input("ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", form["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"], key=f"{idx}_meridos")
-        row1[1].text_input("ΕΠΩΝΥΜΟ", form["ΕΠΩΝΥΜΟ"], key=f"{idx}_surname")
-        row1[2].text_input("ΚΥΡΙΟΝ ΟΝΟΜΑ", form["ΚΥΡΙΟΝ ΟΝΟΜΑ"], key=f"{idx}_name")
-        row1[3].text_input("ΟΝΟΜΑ ΠΑΤΡΟΣ", form["ΟΝΟΜΑ ΠΑΤΡΟΣ"], key=f"{idx}_father")
-        row1[4].text_input("ΟΝΟΜΑ ΜΗΤΡΟΣ", form["ΟΝΟΜΑ ΜΗΤΡΟΣ"], key=f"{idx}_mother")
+        # Row 1 – 5 columns
+        r1 = st.columns(5)
+        r1[0].text_input("ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", form["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"], key=f"{idx}_0")
+        r1[1].text_input("ΕΠΩΝΥΜΟ", form["ΕΠΩΝΥΜΟ"], key=f"{idx}_1")
+        r1[2].text_input("ΚΥΡΙΟΝ ΟΝΟΜΑ", form["ΚΥΡΙΟΝ ΟΝΟΜΑ"], key=f"{idx}_2")
+        r1[3].text_input("ΟΝΟΜΑ ΠΑΤΡΟΣ", form["ΟΝΟΜΑ ΠΑΤΡΟΣ"], key=f"{idx}_3")
+        r1[4].text_input("ΟΝΟΜΑ ΜΗΤΡΟΣ", form["ΟΝΟΜΑ ΜΗΤΡΟΣ"], key=f"{idx}_4")
 
-        # Row 2
-        row2 = st.columns(3)
-        row2[0].text_input("ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_birthplace")
-        row2[1].text_input("ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_year")
-        row2[2].text_input("ΚΑΤΟΙΚΙΑ", form["ΚΑΤΟΙΚΙΑ"], key=f"{idx}_residence")
+        # Row 2 – 3 columns
+        r2 = st.columns(3)
+        r2[0].text_input("ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_5")
+        r2[1].text_input("ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", form["ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ"], key=f"{idx}_6")
+        r2[2].text_input("ΚΑΤΟΙΚΙΑ", form["ΚΑΤΟΙΚΙΑ"], key=f"{idx}_7")
 
-        # Table
-        st.markdown("#### 📋 Αναγνωρισμένος Πίνακας")
+        # Table rows
+        st.markdown("#### 📋 Πίνακας")
         for i, row in enumerate(form["TABLE_ROWS"]):
             st.text_input(f"Γραμμή {i}", row, key=f"{idx}_table_{i}")
