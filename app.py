@@ -3,16 +3,16 @@ from PIL import Image
 from google.cloud import vision
 from google.oauth2 import service_account
 from streamlit_drawable_canvas import st_canvas
-import numpy as np
+from io import BytesIO
 import json
 
-# --- Vision client ---
+# --- Google Cloud Vision credentials ---
 credentials = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"]
 )
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# --- Default layout for fields
+# --- Default field layout
 default_positions = {
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ": (100, 90),
     "ΕΠΩΝΥΜΟ": (260, 90),
@@ -24,7 +24,7 @@ default_positions = {
     "ΚΑΤΟΙΚΙΑ": (740, 180),
 }
 
-# --- Sidebar: field tuning
+# --- Sidebar UI
 st.sidebar.markdown("## 🛠️ Field Calibration")
 form_number = st.sidebar.selectbox("📄 Select Form", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", list(default_positions.keys()))
@@ -37,9 +37,9 @@ x_val = st.sidebar.slider("X Position", 0, 1200, value=x_val)
 y_val = st.sidebar.slider("Y Offset", 0, 400, value=y_val)
 st.session_state.form_layouts[form_number][field_label] = (x_val, y_val)
 
-# --- UI layout
-st.set_page_config(layout="wide", page_title="Greek OCR Parser")
-st.title("📄 Greek Form Parser with Calibration Overlay")
+# --- Main UI
+st.set_page_config(layout="wide", page_title="Greek OCR Calibrator")
+st.title("📄 Greek Form Parser with Bounding Box Calibration")
 
 uploaded_file = st.file_uploader("📎 Upload scanned Greek form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
@@ -48,7 +48,11 @@ if uploaded_file:
     if max(img.size) > 1800:
         img.thumbnail((1800, 1800))
     img_width, img_height = img.size
-    img_np = np.array(img)
+
+    # Convert image to bytes
+    img_bytes = BytesIO()
+    img.save(img_bytes, format="PNG")
+    img_bytes = img_bytes.getvalue()
 
     st.image(img, caption="📷 Uploaded Form", use_column_width=True)
 
@@ -106,10 +110,10 @@ if uploaded_file:
             fields["TABLE_ROWS"] = rows
             forms.append(fields)
 
-    # --- Bounding box overlay
+    # --- Canvas with Overlays
     st.markdown(f"### 🧭 Calibration Overlay – Φόρμα {form_number}")
     st_canvas(
-        background_image=img_np,
+        background_image=img_bytes,
         initial_drawing=overlays,
         height=img_height,
         width=img_width,
@@ -118,7 +122,7 @@ if uploaded_file:
         key="canvas_overlay"
     )
 
-    # --- Layout export
+    # --- Export Button
     st.download_button(
         label="💾 Download Layout as JSON",
         data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
@@ -126,7 +130,7 @@ if uploaded_file:
         mime="application/json"
     )
 
-    # --- Display extracted form values
+    # --- OCR Form Results
     for idx, form in enumerate(forms, start=1):
         with st.expander(f"📄 Φόρμα {idx}", expanded=(idx == form_number)):
             r1 = st.columns(5)
