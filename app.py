@@ -3,15 +3,16 @@ from PIL import Image
 from google.cloud import vision
 from google.oauth2 import service_account
 from streamlit_drawable_canvas import st_canvas
+import numpy as np
 import json
 
-# --- Google Cloud Vision credentials ---
+# --- Vision client ---
 credentials = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"]
 )
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# --- Default header field layout positions ---
+# --- Default layout for fields
 default_positions = {
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ": (100, 90),
     "ΕΠΩΝΥΜΟ": (260, 90),
@@ -23,7 +24,7 @@ default_positions = {
     "ΚΑΤΟΙΚΙΑ": (740, 180),
 }
 
-# --- Sidebar: Tuning UI ---
+# --- Sidebar: field tuning
 st.sidebar.markdown("## 🛠️ Field Calibration")
 form_number = st.sidebar.selectbox("📄 Select Form", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", list(default_positions.keys()))
@@ -36,7 +37,7 @@ x_val = st.sidebar.slider("X Position", 0, 1200, value=x_val)
 y_val = st.sidebar.slider("Y Offset", 0, 400, value=y_val)
 st.session_state.form_layouts[form_number][field_label] = (x_val, y_val)
 
-# --- App UI ---
+# --- UI layout
 st.set_page_config(layout="wide", page_title="Greek OCR Parser")
 st.title("📄 Greek Form Parser with Calibration Overlay")
 
@@ -47,6 +48,7 @@ if uploaded_file:
     if max(img.size) > 1800:
         img.thumbnail((1800, 1800))
     img_width, img_height = img.size
+    img_np = np.array(img)
 
     st.image(img, caption="📷 Uploaded Form", use_column_width=True)
 
@@ -104,10 +106,10 @@ if uploaded_file:
             fields["TABLE_ROWS"] = rows
             forms.append(fields)
 
-    # --- Overlay Canvas
+    # --- Bounding box overlay
     st.markdown(f"### 🧭 Calibration Overlay – Φόρμα {form_number}")
     st_canvas(
-        background_image=img,
+        background_image=img_np,
         initial_drawing=overlays,
         height=img_height,
         width=img_width,
@@ -116,7 +118,7 @@ if uploaded_file:
         key="canvas_overlay"
     )
 
-    # --- Export Tuned Layout
+    # --- Layout export
     st.download_button(
         label="💾 Download Layout as JSON",
         data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
@@ -124,7 +126,7 @@ if uploaded_file:
         mime="application/json"
     )
 
-    # --- Extracted Form Data
+    # --- Display extracted form values
     for idx, form in enumerate(forms, start=1):
         with st.expander(f"📄 Φόρμα {idx}", expanded=(idx == form_number)):
             r1 = st.columns(5)
