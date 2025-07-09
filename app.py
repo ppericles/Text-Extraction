@@ -2,15 +2,17 @@ import streamlit as st
 from PIL import Image
 from google.cloud import vision
 from google.oauth2 import service_account
+from streamlit_drawable_canvas import st_canvas
 
-# --- Google Vision API Client ---
-credentials = service_account.Credentials.from_service_account_info(
-    st.secrets["gcp_service_account"]
-)
+# --- GCP Vision client ---
+credentials = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"])
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# --- Absolute Field Slot Matching ---
-def extract_forms_from_ocr(response):
+# 🔍 Debug mode toggle
+debug_mode = st.sidebar.checkbox("🪪 Enable OCR Debug Overlay", value=False)
+
+# --- Field extraction using absolute layout zones ---
+def extract_forms_from_ocr(response, raw_blocks, debug=False):
     forms_data = []
     try:
         page = response.full_text_annotation.pages[0]
@@ -18,26 +20,30 @@ def extract_forms_from_ocr(response):
         img_height = page.height or 1500
         form_height = img_height / 3
 
-        raw_blocks = []
-        for block in page.blocks:
-            text = ""
-            for para in block.paragraphs:
-                for word in para.words:
-                    text += ''.join(s.text for s in word.symbols) + " "
-            text = text.strip()
-            if text:
-                x = sum(v.x for v in block.bounding_box.vertices) / 4
-                y = sum(v.y for v in block.bounding_box.vertices) / 4
-                raw_blocks.append({"text": text, "x": x, "y": y})
+        # Optional debug: show recognized blocks with coordinates
+        if debug:
+            st.markdown("### 🧱 OCR Text Blocks with Coordinates")
+            for b in raw_blocks:
+                st.markdown(f"`{b['text']}` → (x={int(b['x'])}, y={int(b['y'])})")
 
-        # Define expected field positions by zone
-        def nearest_text(form_blocks, center_x, center_y, radius=100):
-            candidates = [
-                b for b in form_blocks
-                if abs(b["x"] - center_x) < radius and abs(b["y"] - center_y) < radius
+            canvas_result = st_canvas(
+                background_image=img,
+                fill_color="rgba(255, 255, 0, 0.3)",
+                stroke_width=1,
+                update_streamlit=False,
+                height=img.height,
+                width=img.width,
+                drawing_mode="transform",
+                key="canvas_overlay",
+            )
+
+        def nearest_text(blocks, cx, cy, radius=100):
+            found = [
+                b for b in blocks
+                if abs(b["x"] - cx) < radius and abs(b["y"] - cy) < radius
             ]
-            if candidates:
-                return sorted(candidates, key=lambda b: (abs(b["x"] - center_x) + abs(b["y"] - center_y)))[0]["text"]
+            if found:
+                return sorted(found, key=lambda b: (abs(b["x"] - cx) + abs(b["y"] - cy)))[0]["text"]
             return ""
 
         for i in range(3):
@@ -46,18 +52,17 @@ def extract_forms_from_ocr(response):
 
             fields = {
                 "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ": nearest_text(blocks, 100, base_y + 90),
-                "ΕΠΩΝΥΜΟ": nearest_text(blocks, 250, base_y + 90),
-                "ΚΥΡΙΟΝ ΟΝΟΜΑ": nearest_text(blocks, 430, base_y + 90),
-                "ΟΝΟΜΑ ΠΑΤΡΟΣ": nearest_text(blocks, 610, base_y + 90),
-                "ΟΝΟΜΑ ΜΗΤΡΟΣ": nearest_text(blocks, 800, base_y + 90),
+                "ΕΠΩΝΥΜΟ": nearest_text(blocks, 260, base_y + 90),
+                "ΚΥΡΙΟΝ ΟΝΟΜΑ": nearest_text(blocks, 470, base_y + 90),
+                "ΟΝΟΜΑ ΠΑΤΡΟΣ": nearest_text(blocks, 650, base_y + 90),
+                "ΟΝΟΜΑ ΜΗΤΡΟΣ": nearest_text(blocks, 820, base_y + 90),
                 "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ": nearest_text(blocks, 200, base_y + 180),
-                "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ": nearest_text(blocks, 450, base_y + 180),
-                "ΚΑΤΟΙΚΙΑ": nearest_text(blocks, 700, base_y + 180),
+                "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ": nearest_text(blocks, 470, base_y + 180),
+                "ΚΑΤΟΙΚΙΑ": nearest_text(blocks, 740, base_y + 180),
                 "TABLE_ROWS": [
                     b["text"] for b in blocks if b["y"] > base_y + 230 and len(b["text"].split()) >= 2
                 ][:11]
             }
-
             forms_data.append(fields)
 
     except Exception as e:
@@ -65,9 +70,9 @@ def extract_forms_from_ocr(response):
 
     return forms_data
 
-# --- Streamlit UI ---
-st.set_page_config(layout="wide", page_title="Greek Form Parser")
-st.title("📄 Greek OCR – Absolute Layout Form Parser")
+# --- App UI ---
+st.set_page_config(layout="wide", page_title="Greek Form OCR")
+st.title("📄 Greek OCR with Field Calibration Overlay")
 
 uploaded_file = st.file_uploader("📎 Upload Greek form image", type=["jpg", "jpeg", "png"])
 
@@ -79,15 +84,34 @@ if uploaded_file:
 
     st.image(img, caption="📷 Uploaded Image", use_container_width=True)
 
-    with st.spinner("🔍 OCR and extraction..."):
+    with st.spinner("🔍 Running Google OCR..."):
         uploaded_file.seek(0)
         image_proto = vision.Image(content=uploaded_file.read())
         try:
             response = client.document_text_detection(image=image_proto)
-            forms = extract_forms_from_ocr(response)
         except Exception as e:
             st.error(f"❌ Vision API error: {e}")
             st.stop()
+
+        # Build flat block list with positions
+        raw_blocks = []
+        try:
+            for block in response.full_text_annotation.pages[0].blocks:
+                text = "".join(
+                    symbol.text
+                    for para in block.paragraphs
+                    for word in para.words
+                    for symbol in word.symbols
+                ).strip()
+                if text:
+                    x = sum(v.x for v in block.bounding_box.vertices) / 4
+                    y = sum(v.y for v in block.bounding_box.vertices) / 4
+                    raw_blocks.append({"text": text, "x": x, "y": y})
+        except Exception as e:
+            st.error(f"Failed to read block data: {e}")
+            st.stop()
+
+        forms = extract_forms_from_ocr(response, raw_blocks, debug=debug_mode)
 
     for idx, form in enumerate(forms, start=1):
         with st.expander(f"📄 Φόρμα {idx}", expanded=(idx == 1)):
