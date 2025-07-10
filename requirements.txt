@@ -1,10 +1,4 @@
-pytesseract
-pandas
-transformers
-torch
 streamlit
-streamlit-drawable-canvas
+streamlit-image-coordinates
 google-cloud-vision
 Pillow
-streamlit-drawable-canvas==0.8.0
-streamlit-image-coordinates
