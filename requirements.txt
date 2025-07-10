@@ -6,3 +6,4 @@ streamlit
 streamlit-drawable-canvas
 google-cloud-vision
 Pillow
+streamlit-drawable-canvas==0.9.0
