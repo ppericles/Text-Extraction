@@ -1,20 +1,21 @@
 import streamlit as st
 from PIL import Image
-from google.cloud import vision
-from google.oauth2 import service_account
-from streamlit_image_coordinates import streamlit_image_coordinates
+import numpy as np
+import easyocr
 import json
+from streamlit_image_coordinates import streamlit_image_coordinates
+import cv2
 
-# --- Google Cloud Vision client ---
-credentials = service_account.Credentials.from_service_account_info(st.secrets["gcp_service_account"])
-client = vision.ImageAnnotatorClient(credentials=credentials)
+# --- App setup ---
+st.set_page_config(layout="wide", page_title="Greek Handwriting OCR Form Parser")
+st.title("🇬🇷 EasyOCR-Powered Form Parser with Field Annotation")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ",
     "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# --- Session State ---
+# --- Initialize session ---
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -22,61 +23,31 @@ if "click_stage" not in st.session_state:
 if "ocr_blocks" not in st.session_state:
     st.session_state.ocr_blocks = []
 
-st.set_page_config(layout="wide", page_title="Greek Form Bounding Box Tagger")
-st.title("📐 Two-Click Field Annotation with Live OCR Matching")
+# --- Sidebar config ---
+form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
+field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-# --- Layout Import
-uploaded_layout = st.file_uploader("📂 Import Layout (.json)", type=["json"])
-if uploaded_layout:
+# --- Import layout ---
+layout_file = st.sidebar.file_uploader("📂 Import layout (.json)", type=["json"])
+if layout_file:
     try:
-        st.session_state.form_layouts = json.load(uploaded_layout)
-        st.success("✅ Layout imported successfully")
+        st.session_state.form_layouts = json.load(layout_file)
+        st.success("✅ Layout imported")
     except Exception as e:
         st.error(f"Layout import failed: {e}")
 
-# --- Sidebar Field Selector
-form_num = st.sidebar.selectbox("📄 Select Form", [1, 2, 3])
-field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
-
-# --- Image Upload
-uploaded_file = st.file_uploader("📎 Upload scanned Greek form", type=["jpg", "jpeg", "png"])
+# --- Upload form image ---
+uploaded_file = st.file_uploader("📎 Upload scanned handwritten form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
-    img = Image.open(uploaded_file)
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    if max(img.size) > 1800:
-        img = img.resize((min(img.width, 1800), min(img.height, 1800)))
-    img_width, img_height = img.size
+    image = Image.open(uploaded_file).convert("RGB")
+    if max(image.size) > 1800:
+        image = image.resize((min(image.width, 1800), min(image.height, 1800)))
+    img_array = np.array(image)
 
-    st.image(img, caption="📷 Uploaded Form", use_container_width=True)
-    st.caption("👆 Click top-left, then bottom-right to define a bounding box.")
+    st.image(image, caption="📷 Uploaded Image", use_container_width=True)
+    st.caption("👆 Click to define bounding boxes: top-left first, then bottom-right.")
 
-    # --- OCR Block Extraction
-    uploaded_file.seek(0)
-    image_proto = vision.Image(content=uploaded_file.read())
-    try:
-        response = client.document_text_detection(image=image_proto)
-    except Exception as e:
-        st.error(f"OCR failed: {e}")
-        st.stop()
-
-    blocks = []
-    for block in response.full_text_annotation.pages[0].blocks:
-        text = "".join(
-            symbol.text
-            for para in block.paragraphs
-            for word in para.words
-            for symbol in word.symbols
-        ).strip()
-        if text:
-            x = sum(v.x for v in block.bounding_box.vertices) / 4
-            y = sum(v.y for v in block.bounding_box.vertices) / 4
-            blocks.append({"text": text, "x": x, "y": y})
-
-    st.session_state.ocr_blocks = blocks  # cache
-
-    # --- Two-Click Bounding Box Logic
-    coords = streamlit_image_coordinates(img, key="click_box")
+    coords = streamlit_image_coordinates(image, key="coord_click")
     if coords:
         x, y = coords["x"], coords["y"]
         field_boxes = st.session_state.form_layouts[form_num]
@@ -84,7 +55,7 @@ if uploaded_file:
         if st.session_state.click_stage == "start":
             field_boxes[field_label] = {"x1": x, "y1": y}
             st.session_state.click_stage = "end"
-            st.info(f"🟩 Top-left corner set for '{field_label}'. Now click bottom-right.")
+            st.info(f"🟩 Top-left corner set for '{field_label}'. Click bottom-right.")
         else:
             if field_label not in field_boxes:
                 field_boxes[field_label] = {}
@@ -92,39 +63,51 @@ if uploaded_file:
             st.session_state.click_stage = "start"
             st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
-            # --- Auto OCR Match Preview
-            x1, x2 = field_boxes[field_label]["x1"], field_boxes[field_label]["x2"]
-            y1, y2 = field_boxes[field_label]["y1"], field_boxes[field_label]["y2"]
-            xmin, xmax = sorted([x1, x2])
-            ymin, ymax = sorted([y1, y2])
-            match = next(
-                (b for b in st.session_state.ocr_blocks if xmin <= b["x"] <= xmax and ymin <= b["y"] <= ymax),
-                None
-            )
-            preview = match["text"] if match else "(no match)"
-            st.info(f"🔍 Field Preview for '{field_label}': {preview}")
+    # --- OCR with EasyOCR
+    reader = easyocr.Reader(['el'])
+    results = reader.readtext(img_array)
+    st.session_state.ocr_blocks = [
+        {
+            "text": text,
+            "confidence": float(conf),
+            "center": (np.mean([pt[0] for pt in bbox]), np.mean([pt[1] for pt in bbox]))
+        }
+        for bbox, text, conf in results
+    ]
 
-    # --- Full Field Values Display
-    st.markdown("## 🧠 Extracted Field Values")
+    # --- Display results by form
+    st.subheader("🧠 OCR Field Extraction")
     for i in [1, 2, 3]:
-        st.subheader(f"📄 Φόρμα {i}")
-        layout = st.session_state.form_layouts.get(i, {})
+        st.markdown(f"### 📄 Φόρμα {i}")
+        layout = st.session_state.form_layouts[i]
         for label in field_labels:
             box = layout.get(label)
             if box and all(k in box for k in ["x1", "y1", "x2", "y2"]):
                 xmin, xmax = sorted([box["x1"], box["x2"]])
                 ymin, ymax = sorted([box["y1"], box["y2"]])
                 match = next(
-                    (b for b in st.session_state.ocr_blocks if xmin <= b["x"] <= xmax and ymin <= b["y"] <= ymax),
+                    (b for b in st.session_state.ocr_blocks
+                     if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax),
                     None
                 )
-                val = match["text"] if match else ""
+                val = match["text"] if match else "(no match)"
                 st.text_input(label, val, key=f"{i}_{label}")
 
-# --- Layout Export
+    # --- Optional visual overlay
+    if st.checkbox("🖼️ Show detected text boxes"):
+        img_overlay = img_array.copy()
+        for b in results:
+            bbox, text, conf = b
+            pts = np.array(bbox, dtype=np.int32)
+            img_overlay = cv2.polylines(img_overlay, [pts], isClosed=True, color=(0, 255, 0), thickness=2)
+            img_overlay = cv2.putText(img_overlay, text, tuple(pts[0]), cv2.FONT_HERSHEY_SIMPLEX,
+                                      0.6, (255, 0, 0), 1)
+        st.image(img_overlay, caption="🖼️ Text Box Overlay", use_container_width=True)
+
+# --- Layout export
 st.download_button(
-    label="💾 Download Layout as JSON",
+    label="💾 Export Layout as JSON",
     data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
-    file_name="form_field_boxes.json",
+    file_name="form_layouts.json",
     mime="application/json"
 )
