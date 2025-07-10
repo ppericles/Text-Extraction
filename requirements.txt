@@ -1,4 +1,4 @@
 streamlit
-streamlit-image-coordinates
-google-cloud-vision
+easyocr
+opencv-python
 Pillow
