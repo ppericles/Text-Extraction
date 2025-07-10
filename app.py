@@ -3,16 +3,24 @@ from PIL import Image
 from google.cloud import vision
 from google.oauth2 import service_account
 from streamlit_drawable_canvas import st_canvas
-from streamlit_drawable_canvas.utils import image_to_url
 import json
+from io import BytesIO
+import base64
 
-# --- Vision Client Setup ---
+# --- Convert PIL image to base64 data URL ---
+def pil_image_to_data_url(img):
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    data = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{data}"
+
+# --- Google Cloud Vision credentials ---
 credentials = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"]
 )
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# --- Default Field Layout ---
+# --- Default layout
 default_positions = {
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ": (100, 90),
     "ΕΠΩΝΥΜΟ": (260, 90),
@@ -24,20 +32,20 @@ default_positions = {
     "ΚΑΤΟΙΚΙΑ": (740, 180),
 }
 
-# --- App Setup ---
+# --- Streamlit setup
 st.set_page_config(layout="wide", page_title="Greek OCR Calibrator")
-st.title("📄 Greek Form Parser with Bounding Box Calibration")
+st.title("📄 Greek Form Parser with Canvas Overlay")
 
-# --- Layout Import ---
+# --- Layout import
 uploaded_layout = st.file_uploader("📂 Import Layout from JSON", type=["json"])
 if uploaded_layout:
     try:
         st.session_state.form_layouts = json.load(uploaded_layout)
         st.success("✅ Layout imported successfully!")
     except Exception as e:
-        st.error(f"Error loading layout: {e}")
+        st.error(f"Failed to load layout: {e}")
 
-# --- Sidebar Calibration ---
+# --- Sidebar tuner
 st.sidebar.markdown("## 🛠️ Field Calibration")
 form_number = st.sidebar.selectbox("📄 Select Form", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", list(default_positions.keys()))
@@ -46,27 +54,30 @@ if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: default_positions.copy() for i in [1, 2, 3]}
 
 x_val, y_val = st.session_state.form_layouts[form_number][field_label]
-x_val = st.sidebar.slider("X", 0, 1200, value=x_val)
+x_val = st.sidebar.slider("X Position", 0, 1200, value=x_val)
 y_val = st.sidebar.slider("Y Offset", 0, 400, value=y_val)
 st.session_state.form_layouts[form_number][field_label] = (x_val, y_val)
 
-# --- Image Upload + OCR ---
+# --- Image upload + OCR
 uploaded_file = st.file_uploader("📎 Upload scanned Greek form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     uploaded_file.seek(0)
     img = Image.open(uploaded_file)
+
     if img.mode != "RGB":
         img = img.convert("RGB")
+
     if max(img.size) > 1800:
         img = img.resize((min(img.width, 1800), min(img.height, 1800)))
-    img_width, img_height = img.size
 
+    img_width, img_height = img.size
     st.image(img, caption="📷 Uploaded Form", use_column_width=True)
-    img_url = image_to_url(img)
+    canvas_bg = pil_image_to_data_url(img)
 
     with st.spinner("🔍 Performing OCR..."):
         uploaded_file.seek(0)
         image_proto = vision.Image(content=uploaded_file.read())
+
         try:
             response = client.document_text_detection(image=image_proto)
         except Exception as e:
@@ -117,10 +128,10 @@ if uploaded_file:
             fields["TABLE_ROWS"] = rows
             forms.append(fields)
 
-    # --- Canvas Rendering
+    # --- Canvas render
     st.markdown(f"### 🧭 Calibration Overlay – Φόρμα {form_number}")
     st_canvas(
-        background_image=img_url,
+        background_image=canvas_bg,
         initial_drawing=overlays,
         height=img_height,
         width=img_width,
@@ -129,7 +140,7 @@ if uploaded_file:
         key="canvas_overlay"
     )
 
-    # --- Export Layout
+    # --- Export button
     st.download_button(
         label="💾 Download Layout as JSON",
         data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
@@ -137,7 +148,7 @@ if uploaded_file:
         mime="application/json"
     )
 
-    # --- Display Form Data
+    # --- Display OCR form data
     for idx, form in enumerate(forms, start=1):
         with st.expander(f"📄 Φόρμα {idx}", expanded=(idx == form_number)):
             r1 = st.columns(5)
