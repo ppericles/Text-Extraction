@@ -3,16 +3,15 @@ from PIL import Image
 from google.cloud import vision
 from google.oauth2 import service_account
 from streamlit_drawable_canvas import st_canvas
-from io import BytesIO
 import json
 
-# --- Google Cloud Vision credentials ---
+# --- Vision client setup ---
 credentials = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"]
 )
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# --- Default field layout
+# --- Default field layout positions ---
 default_positions = {
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ": (100, 90),
     "ΕΠΩΝΥΜΟ": (260, 90),
@@ -24,7 +23,7 @@ default_positions = {
     "ΚΑΤΟΙΚΙΑ": (740, 180),
 }
 
-# --- Sidebar UI
+# --- Sidebar Calibration UI ---
 st.sidebar.markdown("## 🛠️ Field Calibration")
 form_number = st.sidebar.selectbox("📄 Select Form", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", list(default_positions.keys()))
@@ -37,22 +36,20 @@ x_val = st.sidebar.slider("X Position", 0, 1200, value=x_val)
 y_val = st.sidebar.slider("Y Offset", 0, 400, value=y_val)
 st.session_state.form_layouts[form_number][field_label] = (x_val, y_val)
 
-# --- Main UI
+# --- App UI Layout ---
 st.set_page_config(layout="wide", page_title="Greek OCR Calibrator")
-st.title("📄 Greek Form Parser with Bounding Box Calibration")
+st.title("📄 Greek Form Parser with Live Field Layout Tuning")
 
 uploaded_file = st.file_uploader("📎 Upload scanned Greek form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     uploaded_file.seek(0)
     img = Image.open(uploaded_file)
+    if img.mode != "RGB":
+        img = img.convert("RGB")  # ✅ Canvas expects RGB mode
+
     if max(img.size) > 1800:
         img.thumbnail((1800, 1800))
     img_width, img_height = img.size
-
-    # Convert image to bytes
-    img_bytes = BytesIO()
-    img.save(img_bytes, format="PNG")
-    img_bytes = img_bytes.getvalue()
 
     st.image(img, caption="📷 Uploaded Form", use_column_width=True)
 
@@ -66,6 +63,7 @@ if uploaded_file:
             st.error(f"OCR failed: {e}")
             st.stop()
 
+        # --- OCR Block Extraction ---
         blocks = []
         for block in response.full_text_annotation.pages[0].blocks:
             text = "".join(
@@ -79,6 +77,7 @@ if uploaded_file:
                 y = sum(v.y for v in block.bounding_box.vertices) / 4
                 blocks.append({"text": text, "x": x, "y": y})
 
+        # --- Layout Mapping for Each Form ---
         form_height = img_height / 3
         forms = []
         overlays = []
@@ -97,6 +96,8 @@ if uploaded_file:
                 )
                 val = match["text"] if match else ""
                 fields[label] = val
+
+                # Draw box if this is the selected form
                 if i == form_number:
                     overlays.append({
                         "label": f"{label}: {val or '(no match)'}",
@@ -106,14 +107,15 @@ if uploaded_file:
                         "height": 30
                     })
 
+            # Extract table-style rows
             rows = [b["text"] for b in blocks_in_form if b["y"] > base_y + 230 and len(b["text"].split()) >= 2][:11]
             fields["TABLE_ROWS"] = rows
             forms.append(fields)
 
-    # --- Canvas with Overlays
+    # --- Overlay Canvas Rendering
     st.markdown(f"### 🧭 Calibration Overlay – Φόρμα {form_number}")
     st_canvas(
-        background_image=img_bytes,
+        background_image=img,
         initial_drawing=overlays,
         height=img_height,
         width=img_width,
@@ -122,7 +124,7 @@ if uploaded_file:
         key="canvas_overlay"
     )
 
-    # --- Export Button
+    # --- Download Tuned Layout as JSON
     st.download_button(
         label="💾 Download Layout as JSON",
         data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
@@ -130,7 +132,7 @@ if uploaded_file:
         mime="application/json"
     )
 
-    # --- OCR Form Results
+    # --- Display Parsed Form Data
     for idx, form in enumerate(forms, start=1):
         with st.expander(f"📄 Φόρμα {idx}", expanded=(idx == form_number)):
             r1 = st.columns(5)
