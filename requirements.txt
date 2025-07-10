@@ -2,3 +2,4 @@ streamlit
 easyocr
 opencv-python
 Pillow
+streamlit-image-coordinates
