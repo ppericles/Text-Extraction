@@ -4,23 +4,14 @@ from google.cloud import vision
 from google.oauth2 import service_account
 from streamlit_drawable_canvas import st_canvas
 import json
-from io import BytesIO
-import base64
 
-# --- Convert PIL image to base64 data URL ---
-def pil_image_to_data_url(img):
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    data = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return f"data:image/png;base64,{data}"
-
-# --- Google Cloud Vision credentials ---
+# --- Google Cloud Vision client ---
 credentials = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"]
 )
 client = vision.ImageAnnotatorClient(credentials=credentials)
 
-# --- Default layout
+# --- Default layout coordinates ---
 default_positions = {
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ": (100, 90),
     "ΕΠΩΝΥΜΟ": (260, 90),
@@ -32,11 +23,11 @@ default_positions = {
     "ΚΑΤΟΙΚΙΑ": (740, 180),
 }
 
-# --- Streamlit setup
+# --- App UI setup ---
 st.set_page_config(layout="wide", page_title="Greek OCR Calibrator")
-st.title("📄 Greek Form Parser with Canvas Overlay")
+st.title("📄 Greek Form Parser with Field Overlay")
 
-# --- Layout import
+# --- Import JSON layout if provided ---
 uploaded_layout = st.file_uploader("📂 Import Layout from JSON", type=["json"])
 if uploaded_layout:
     try:
@@ -45,7 +36,7 @@ if uploaded_layout:
     except Exception as e:
         st.error(f"Failed to load layout: {e}")
 
-# --- Sidebar tuner
+# --- Sidebar field tuner ---
 st.sidebar.markdown("## 🛠️ Field Calibration")
 form_number = st.sidebar.selectbox("📄 Select Form", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", list(default_positions.keys()))
@@ -58,26 +49,22 @@ x_val = st.sidebar.slider("X Position", 0, 1200, value=x_val)
 y_val = st.sidebar.slider("Y Offset", 0, 400, value=y_val)
 st.session_state.form_layouts[form_number][field_label] = (x_val, y_val)
 
-# --- Image upload + OCR
+# --- Upload image & OCR logic ---
 uploaded_file = st.file_uploader("📎 Upload scanned Greek form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     uploaded_file.seek(0)
     img = Image.open(uploaded_file)
-
     if img.mode != "RGB":
         img = img.convert("RGB")
-
     if max(img.size) > 1800:
         img = img.resize((min(img.width, 1800), min(img.height, 1800)))
 
     img_width, img_height = img.size
     st.image(img, caption="📷 Uploaded Form", use_column_width=True)
-    canvas_bg = pil_image_to_data_url(img)
 
     with st.spinner("🔍 Performing OCR..."):
         uploaded_file.seek(0)
         image_proto = vision.Image(content=uploaded_file.read())
-
         try:
             response = client.document_text_detection(image=image_proto)
         except Exception as e:
@@ -128,10 +115,10 @@ if uploaded_file:
             fields["TABLE_ROWS"] = rows
             forms.append(fields)
 
-    # --- Canvas render
+    # --- Canvas overlay using PIL image
     st.markdown(f"### 🧭 Calibration Overlay – Φόρμα {form_number}")
     st_canvas(
-        background_image=canvas_bg,
+        background_image=img,  # ✅ Pure PIL Image object
         initial_drawing=overlays,
         height=img_height,
         width=img_width,
@@ -140,7 +127,7 @@ if uploaded_file:
         key="canvas_overlay"
     )
 
-    # --- Export button
+    # --- Export layout
     st.download_button(
         label="💾 Download Layout as JSON",
         data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
@@ -148,7 +135,7 @@ if uploaded_file:
         mime="application/json"
     )
 
-    # --- Display OCR form data
+    # --- Display OCR results
     for idx, form in enumerate(forms, start=1):
         with st.expander(f"📄 Φόρμα {idx}", expanded=(idx == form_number)):
             r1 = st.columns(5)
