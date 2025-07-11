@@ -21,10 +21,17 @@ if "click_stage" not in st.session_state:
     st.session_state.click_stage = "start"
 if "ocr_blocks" not in st.session_state:
     st.session_state.ocr_blocks = []
+if "last_selected_field" not in st.session_state:
+    st.session_state.last_selected_field = None
 
-# --- Sidebar controls
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
+
+# --- Reset click stage if field changes
+if field_label != st.session_state.last_selected_field:
+    st.session_state.last_selected_field = field_label
+    st.session_state.click_stage = "start"
+    st.session_state.coord_click = None  # Reset stored coordinates
 
 # --- Upload credentials file
 cred_file = st.sidebar.file_uploader("🔐 Upload Google Vision credentials (JSON)", type=["json"])
@@ -51,12 +58,12 @@ if uploaded_file:
     img_array = np.array(image)
 
     st.image(image, caption="📷 Uploaded Image", use_container_width=True)
-    st.caption("👆 Click to define bounding boxes for fields. Top-left then bottom-right.")
-
     coords = streamlit_image_coordinates(image, key="coord_click")
+    field_boxes = st.session_state.form_layouts[form_num]
+
+    # --- Click logic (safe)
     if coords:
         x, y = coords["x"], coords["y"]
-        field_boxes = st.session_state.form_layouts[form_num]
         if st.session_state.click_stage == "start":
             field_boxes[field_label] = {"x1": x, "y1": y}
             st.session_state.click_stage = "end"
@@ -76,7 +83,7 @@ if uploaded_file:
         response = client.document_text_detection(image=vision_img)
         text_annotations = response.text_annotations
 
-        # Skip first item (entire text block)
+        # Skip first (entire doc)
         block_data = []
         for ann in text_annotations[1:]:
             bounds = [(v.x, v.y) for v in ann.bounding_poly.vertices]
@@ -85,7 +92,7 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = block_data
 
-        # --- Display field values per form
+        # --- Field matching
         st.subheader("🧠 OCR Field Extraction")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
