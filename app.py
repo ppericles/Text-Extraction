@@ -62,6 +62,8 @@ if uploaded_file:
             st.session_state.click_stage = "end"
             st.info(f"🟩 Top-left set for '{field_label}'. Click bottom-right.")
         else:
+            if field_label not in field_boxes:
+                field_boxes[field_label] = {}
             field_boxes[field_label].update({"x2": x, "y2": y})
             st.session_state.click_stage = "start"
             st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
