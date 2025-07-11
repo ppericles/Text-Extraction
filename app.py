@@ -7,14 +7,18 @@ import base64
 from io import BytesIO
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
+from unidecode import unidecode  # Helps normalize Greek text
 
 def image_to_base64(img):
     buffered = BytesIO()
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
+def normalize(text):
+    return unidecode(text.upper().strip())
+
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek Handwriting OCR with Scrollable Overlay")
+st.title("🇬🇷 Greek Handwriting OCR with Auto Field Extraction")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ",
@@ -29,11 +33,13 @@ if "ocr_blocks" not in st.session_state:
     st.session_state.ocr_blocks = []
 if "last_selected_field" not in st.session_state:
     st.session_state.last_selected_field = None
+if "auto_extracted_fields" not in st.session_state:
+    st.session_state.auto_extracted_fields = {}
 
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-# Reset field selection logic
+# Field switch reset
 if field_label != st.session_state.last_selected_field:
     st.session_state.last_selected_field = field_label
     st.session_state.click_stage = "start"
@@ -89,13 +95,16 @@ if uploaded_file:
             x1, x2 = min(xs), max(xs)
             y1, y2 = min(ys), max(ys)
             center = (np.mean(xs), np.mean(ys))
-            blocks.append({"text": ann.description, "center": center})
+            blocks.append({
+                "text": ann.description,
+                "center": center,
+                "bbox": (x1, y1, x2, y2)
+            })
             draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
             draw.text((x1, y1 - 10), ann.description, fill="blue")
 
         st.session_state.ocr_blocks = blocks
 
-        # Show scrollable overlay
         scroll_base64 = image_to_base64(image)
         st.markdown(
             f"""
@@ -108,8 +117,7 @@ if uploaded_file:
             unsafe_allow_html=True
         )
 
-        # Field extraction
-        st.subheader("🧠 OCR Field Extraction")
+        st.subheader("🧠 OCR Field Extraction (Tagged)")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
             layout = st.session_state.form_layouts[i]
@@ -124,6 +132,36 @@ if uploaded_file:
                     ]
                     val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
+
+        st.markdown("---")
+        st.header("🪄 Auto-Extracted Fields")
+        if st.button("🪄 Auto-Extract Fields from OCR"):
+            found = {}
+            normalized_labels = {normalize(lbl): lbl for lbl in field_labels}
+
+            for idx, block in enumerate(st.session_state.ocr_blocks):
+                txt = normalize(block["text"])
+                if txt in normalized_labels:
+                    # Try to find next neighbor to the right or below
+                    ref_x, ref_y = block["center"]
+                    neighbor = None
+                    min_dist = float("inf")
+                    for other in st.session_state.ocr_blocks[idx+1:]:
+                        dx = other["center"][0] - ref_x
+                        dy = other["center"][1] - ref_y
+                        if dx > 0 or dy > 0:
+                            dist = np.sqrt(dx**2 + dy**2)
+                            if dist < min_dist:
+                                min_dist = dist
+                                neighbor = other
+                    if neighbor:
+                        label = normalized_labels[txt]
+                        found[label] = neighbor["text"]
+
+            st.session_state.auto_extracted_fields = found
+
+        if st.session_state.auto_extracted_fields:
+            st.json(st.session_state.auto_extracted_fields)
 
 # Export layout
 st.download_button(
