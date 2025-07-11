@@ -102,12 +102,11 @@ if uploaded_file:
                 if box and all(k in box for k in ["x1", "y1", "x2", "y2"]):
                     xmin, xmax = sorted([box["x1"], box["x2"]])
                     ymin, ymax = sorted([box["y1"], box["y2"]])
-                    match = next(
-                        (b for b in st.session_state.ocr_blocks
-                         if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax),
-                        None
-                    )
-                    val = match["text"] if match else "(no match)"
+                    matches = [
+                        b["text"] for b in st.session_state.ocr_blocks
+                        if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax
+                    ]
+                    val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
 
 # --- Export layout
