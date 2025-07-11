@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import json
 import os
@@ -8,22 +8,19 @@ from io import BytesIO
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
 
-# Helper to encode image as base64 for scrollable preview
 def image_to_base64(img):
     buffered = BytesIO()
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
-# App config
 st.set_page_config(layout="wide", page_title="Greek Handwriting OCR with Google Vision")
-st.title("🇬🇷 Greek Handwriting OCR (Google Vision AI + Scrollable Overlay)")
+st.title("🇬🇷 Greek Handwriting OCR with Scrollable Annotated Overlay")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ",
     "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# Session state
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -36,7 +33,7 @@ if "last_selected_field" not in st.session_state:
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-# Reset click state when field changes
+# Reset click logic on field switch
 if field_label != st.session_state.last_selected_field:
     st.session_state.last_selected_field = field_label
     st.session_state.click_stage = "start"
@@ -60,17 +57,13 @@ if layout_file:
     except Exception as e:
         st.sidebar.error(f"Import failed: {e}")
 
-# Image upload
 uploaded_file = st.file_uploader("📎 Upload scanned handwritten form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     img_array = np.array(image)
-
-    st.caption("👆 Click top-left then bottom-right to define fields on the image")
-
-    coords = streamlit_image_coordinates(image, key="coord_click")
     field_boxes = st.session_state.form_layouts[form_num]
 
+    coords = streamlit_image_coordinates(image, key="coord_click")
     if coords:
         x, y = coords["x"], coords["y"]
         if st.session_state.click_stage == "start":
@@ -84,47 +77,39 @@ if uploaded_file:
             st.session_state.click_stage = "start"
             st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
-    # Run OCR
     if cred_file:
         client = vision.ImageAnnotatorClient()
         content = uploaded_file.getvalue()
         vision_img = vision.Image(content=content)
         response = client.document_text_detection(image=vision_img)
-        text_annotations = response.text_annotations
+        annotations = response.text_annotations
 
-        block_data = []
-        for ann in text_annotations[1:]:
+        blocks = []
+        draw = ImageDraw.Draw(image)
+
+        for ann in annotations[1:]:
             bounds = [(v.x, v.y) for v in ann.bounding_poly.vertices]
             center = (np.mean([p[0] for p in bounds]), np.mean([p[1] for p in bounds]))
-            block_data.append({"text": ann.description, "center": center})
+            blocks.append({"text": ann.description, "center": center})
+            draw.rectangle(bounds, outline="red", width=2)
+            draw.text((bounds[0][0], bounds[0][1] - 10), ann.description, fill="blue")
 
-        st.session_state.ocr_blocks = block_data
+        st.session_state.ocr_blocks = blocks
 
-        # Scrollable overlay with field boxes
-        overlay = img_array.copy()
-        for i in [1, 2, 3]:
-            layout = st.session_state.form_layouts[i]
-            for label in field_labels:
-                box = layout.get(label)
-                if box and all(k in box for k in ["x1", "y1", "x2", "y2"]):
-                    x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
-                    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(overlay, f"{label} (Φ{i})", (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 1)
-
-        # Render overlay scrollable
-        scroll_img = Image.fromarray(overlay)
-        scroll_base64 = image_to_base64(scroll_img)
+        # Scrollable overlay
+        scroll_base64 = image_to_base64(image)
         st.markdown(
             f"""
-            <div style='overflow-x:auto; white-space:nowrap; border:1px solid #ccc; padding:10px; max-height:600px'>
-                <img src='data:image/png;base64,{scroll_base64}' style='height:600px' />
+            <div style='overflow-x:auto; border:1px solid #ccc; padding:10px;'>
+                <div style='display:inline-block; white-space:nowrap;'>
+                    <img src='data:image/png;base64,{scroll_base64}' style='height:600px' />
+                </div>
             </div>
             """,
             unsafe_allow_html=True
         )
 
-        # Extract field values from OCR
+        # Field values
         st.subheader("🧠 OCR Field Extraction")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
@@ -141,7 +126,7 @@ if uploaded_file:
                     val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
 
-# Layout export
+# Export button
 st.download_button(
     label="💾 Export Layout as JSON",
     data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
