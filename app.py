@@ -57,7 +57,25 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     img_array = np.array(image)
 
-    st.image(image, caption="📷 Uploaded Image", use_container_width=True)
+    import base64
+    from io import BytesIO
+
+    def image_to_base64(img):
+        buffered = BytesIO()
+        img.save(buffered, format="PNG")
+        return base64.b64encode(buffered.getvalue()).decode()
+
+    with st.container():
+    st.markdown(
+        """
+        <div style='overflow-x: auto; width: 100%; border: 1px solid #ddd; padding: 10px'>
+            <img src='data:image/png;base64,{img_data}' style='max-height:600px' />
+        </div>
+        """.format(
+            img_data=image_to_base64(image)
+        ),
+        unsafe_allow_html=True
+    )
     coords = streamlit_image_coordinates(image, key="coord_click")
     field_boxes = st.session_state.form_layouts[form_num]
 
