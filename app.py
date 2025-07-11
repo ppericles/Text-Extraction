@@ -66,16 +66,16 @@ if uploaded_file:
         return base64.b64encode(buffered.getvalue()).decode()
 
     with st.container():
-    st.markdown(
-        """
-        <div style='overflow-x: auto; width: 100%; border: 1px solid #ddd; padding: 10px'>
-            <img src='data:image/png;base64,{img_data}' style='max-height:600px' />
-        </div>
-        """.format(
-            img_data=image_to_base64(image)
-        ),
-        unsafe_allow_html=True
-    )
+        st.markdown(
+            """
+            <div style='overflow-x: auto; width: 100%; border: 1px solid #ddd; padding: 10px'>
+                <img src='data:image/png;base64,{img_data}' style='max-height:600px' />
+            </div>
+            """.format(
+                img_data=image_to_base64(image)
+            ),
+            unsafe_allow_html=True
+         )
     coords = streamlit_image_coordinates(image, key="coord_click")
     field_boxes = st.session_state.form_layouts[form_num]
 
