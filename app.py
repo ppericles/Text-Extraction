@@ -8,15 +8,15 @@ from io import BytesIO
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
 
-# Image scroll helper
+# Helper to encode image as base64 for scrollable preview
 def image_to_base64(img):
     buffered = BytesIO()
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
-# Page setup
+# App config
 st.set_page_config(layout="wide", page_title="Greek Handwriting OCR with Google Vision")
-st.title("🇬🇷 Greek Handwriting Form Parser (Google Vision AI)")
+st.title("🇬🇷 Greek Handwriting OCR (Google Vision AI + Scrollable Overlay)")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ",
@@ -36,13 +36,13 @@ if "last_selected_field" not in st.session_state:
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-# Reset click logic if field changes
+# Reset click state when field changes
 if field_label != st.session_state.last_selected_field:
     st.session_state.last_selected_field = field_label
     st.session_state.click_stage = "start"
     st.session_state.coord_click = None
 
-# Credentials file
+# Credentials
 cred_file = st.sidebar.file_uploader("🔐 Upload Google Vision credentials (JSON)", type=["json"])
 if cred_file:
     cred_path = "credentials.json"
@@ -66,21 +66,11 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     img_array = np.array(image)
 
-    # Display scrollable uploaded image
-    img_base64 = image_to_base64(image)
-    st.markdown(
-        f"""
-        <div style='overflow-x:auto; white-space:nowrap; border:1px solid #ccc; padding:10px; max-height:600px'>
-            <img src='data:image/png;base64,{img_base64}' style='height:600px' />
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.caption("👆 Click top-left then bottom-right to define fields on the image")
 
     coords = streamlit_image_coordinates(image, key="coord_click")
     field_boxes = st.session_state.form_layouts[form_num]
 
-    # Two-click box logic
     if coords:
         x, y = coords["x"], coords["y"]
         if st.session_state.click_stage == "start":
@@ -94,7 +84,7 @@ if uploaded_file:
             st.session_state.click_stage = "start"
             st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
-    # OCR detection
+    # Run OCR
     if cred_file:
         client = vision.ImageAnnotatorClient()
         content = uploaded_file.getvalue()
@@ -110,7 +100,31 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = block_data
 
-        # OCR field extraction
+        # Scrollable overlay with field boxes
+        overlay = img_array.copy()
+        for i in [1, 2, 3]:
+            layout = st.session_state.form_layouts[i]
+            for label in field_labels:
+                box = layout.get(label)
+                if box and all(k in box for k in ["x1", "y1", "x2", "y2"]):
+                    x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
+                    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(overlay, f"{label} (Φ{i})", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 1)
+
+        # Render overlay scrollable
+        scroll_img = Image.fromarray(overlay)
+        scroll_base64 = image_to_base64(scroll_img)
+        st.markdown(
+            f"""
+            <div style='overflow-x:auto; white-space:nowrap; border:1px solid #ccc; padding:10px; max-height:600px'>
+                <img src='data:image/png;base64,{scroll_base64}' style='height:600px' />
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # Extract field values from OCR
         st.subheader("🧠 OCR Field Extraction")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
@@ -127,7 +141,7 @@ if uploaded_file:
                     val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
 
-# Export layout
+# Layout export
 st.download_button(
     label="💾 Export Layout as JSON",
     data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
