@@ -1,5 +1,6 @@
-google-cloud-vision
 streamlit
+google-cloud-vision
 Pillow
 numpy
 streamlit-image-coordinates
+unidecode
