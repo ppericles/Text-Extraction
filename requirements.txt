@@ -2,5 +2,3 @@ transformers
 torch
 streamlit
 Pillow
-opencv-python-headless
-streamlit-image-coordinates
