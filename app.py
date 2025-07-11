@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import numpy as np
 import json
 import os
@@ -13,8 +13,8 @@ def image_to_base64(img):
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
-st.set_page_config(layout="wide", page_title="Greek Handwriting OCR with Google Vision")
-st.title("🇬🇷 Greek Handwriting OCR with Scrollable Annotated Overlay")
+st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
+st.title("🇬🇷 Greek Handwriting OCR with Scrollable Overlay")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ",
@@ -33,14 +33,13 @@ if "last_selected_field" not in st.session_state:
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-# Reset click logic on field switch
+# Reset field selection logic
 if field_label != st.session_state.last_selected_field:
     st.session_state.last_selected_field = field_label
     st.session_state.click_stage = "start"
     st.session_state.coord_click = None
 
-# Credentials
-cred_file = st.sidebar.file_uploader("🔐 Upload Google Vision credentials (JSON)", type=["json"])
+cred_file = st.sidebar.file_uploader("🔐 Google credentials (JSON)", type=["json"])
 if cred_file:
     cred_path = "credentials.json"
     with open(cred_path, "wb") as f:
@@ -48,7 +47,6 @@ if cred_file:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = cred_path
     st.sidebar.success("✅ Credentials loaded")
 
-# Layout import
 layout_file = st.sidebar.file_uploader("📂 Import layout (.json)", type=["json"])
 if layout_file:
     try:
@@ -57,10 +55,10 @@ if layout_file:
     except Exception as e:
         st.sidebar.error(f"Import failed: {e}")
 
-uploaded_file = st.file_uploader("📎 Upload scanned handwritten form", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    img_array = np.array(image)
+    draw = ImageDraw.Draw(image)
     field_boxes = st.session_state.form_layouts[form_num]
 
     coords = streamlit_image_coordinates(image, key="coord_click")
@@ -79,24 +77,25 @@ if uploaded_file:
 
     if cred_file:
         client = vision.ImageAnnotatorClient()
-        content = uploaded_file.getvalue()
-        vision_img = vision.Image(content=content)
+        vision_img = vision.Image(content=uploaded_file.getvalue())
         response = client.document_text_detection(image=vision_img)
         annotations = response.text_annotations
 
         blocks = []
-        draw = ImageDraw.Draw(image)
-
         for ann in annotations[1:]:
-            bounds = [(v.x, v.y) for v in ann.bounding_poly.vertices]
-            center = (np.mean([p[0] for p in bounds]), np.mean([p[1] for p in bounds]))
+            vertices = ann.bounding_poly.vertices
+            xs = [v.x for v in vertices]
+            ys = [v.y for v in vertices]
+            x1, x2 = min(xs), max(xs)
+            y1, y2 = min(ys), max(ys)
+            center = (np.mean(xs), np.mean(ys))
             blocks.append({"text": ann.description, "center": center})
-            draw.rectangle(bounds, outline="red", width=2)
-            draw.text((bounds[0][0], bounds[0][1] - 10), ann.description, fill="blue")
+            draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
+            draw.text((x1, y1 - 10), ann.description, fill="blue")
 
         st.session_state.ocr_blocks = blocks
 
-        # Scrollable overlay
+        # Show scrollable overlay
         scroll_base64 = image_to_base64(image)
         st.markdown(
             f"""
@@ -109,7 +108,7 @@ if uploaded_file:
             unsafe_allow_html=True
         )
 
-        # Field values
+        # Field extraction
         st.subheader("🧠 OCR Field Extraction")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
@@ -126,7 +125,7 @@ if uploaded_file:
                     val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
 
-# Export button
+# Export layout
 st.download_button(
     label="💾 Export Layout as JSON",
     data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
