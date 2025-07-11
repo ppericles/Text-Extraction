@@ -1,5 +1,6 @@
+transformers
+torch
 streamlit
-easyocr
-opencv-python
 Pillow
+opencv-python
 streamlit-image-coordinates
