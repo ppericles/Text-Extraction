@@ -1,4 +1,5 @@
-transformers
-torch
+google-cloud-vision
 streamlit
 Pillow
+numpy
+streamlit-image-coordinates
