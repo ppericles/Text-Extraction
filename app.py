@@ -18,7 +18,7 @@ def image_to_base64(img):
     return base64.b64encode(buffered.getvalue()).decode()
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek OCR Annotator — Scrollable Tagging + True Overlay")
+st.title("🇬🇷 Greek OCR Annotator — Scrollable Zoom + True Overlay")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
@@ -37,7 +37,9 @@ if "auto_extracted_fields" not in st.session_state:
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-cred_file = st.sidebar.file_uploader("🔐 Google credentials (JSON)", type=["json"])
+zoom = st.sidebar.slider("🔍 Zoom", min_value=0.5, max_value=2.5, value=1.5, step=0.1)
+
+cred_file = st.sidebar.file_uploader("🔐 Upload Google credentials", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f:
         f.write(cred_file.read())
@@ -55,8 +57,7 @@ if layout_file:
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    scale = 1.5
-    scaled_image = image.resize((int(image.width * scale), image.height))
+    scaled_image = image.resize((int(image.width * zoom), int(image.height * zoom)))
     field_boxes = st.session_state.form_layouts[form_num]
 
     st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
@@ -85,8 +86,8 @@ if uploaded_file:
 
         for ann in annotations[1:]:
             vertices = ann.bounding_poly.vertices
-            xs = [int(v.x * scale) for v in vertices]
-            ys = [int(v.y) for v in vertices]
+            xs = [int(v.x * zoom) for v in vertices]
+            ys = [int(v.y * zoom) for v in vertices]
             x1, x2 = min(xs), max(xs)
             y1, y2 = min(ys), max(ys)
             center = (np.mean(xs), np.mean(ys))
@@ -104,12 +105,13 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = blocks
 
-        st.markdown("### 📌 Tagged OCR Overlay (Aspect Ratio Preserved)")
-        base64_overlay = image_to_base64(draw_img)
+        # ✅ Overlay image with preserved aspect ratio
+        st.markdown("### 📌 Tagged OCR Overlay")
+        overlay_base64 = image_to_base64(draw_img)
         st.markdown(
             f"""
             <div style='overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
-                <img src='data:image/png;base64,{base64_overlay}' style='max-width:none; height:auto; display:block;' />
+                <img src='data:image/png;base64,{overlay_base64}' style='max-width:none; height:auto; display:block;' />
             </div>
             """,
             unsafe_allow_html=True
