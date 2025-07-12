@@ -169,7 +169,7 @@ if uploaded_file:
                                 min_dist = dist
                                 neighbor = other
                     if neighbor:
-                        label = normalized_labels[txt)
+                        label = normalized_labels[txt]
                         found[label] = neighbor["text"]
             st.session_state.auto_extracted_fields = found
 
