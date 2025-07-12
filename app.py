@@ -78,7 +78,7 @@ if uploaded_file:
         unsafe_allow_html=True
     )
 
-    coords = streamlit_image_coordinates(image, key="coord_click", display=False)
+    coords = streamlit_image_coordinates(image, key="coord_click")
     if coords:
         x, y = coords["x"], coords["y"]
         if st.session_state.click_stage == "start":
