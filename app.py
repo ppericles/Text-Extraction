@@ -63,6 +63,18 @@ if uploaded_file:
     scaled_image = image.resize((int(image.width * zoom), int(image.height * zoom)))
     field_boxes = st.session_state.form_layouts[form_num]
 
+    # Display original image with horizontal scroll
+    st.markdown("### 🖼️ Original Image (Scrollable)")
+    original_base64 = image_to_base64(scaled_image)
+    st.markdown(
+        f"""
+        <div style='overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
+            <img src='data:image/png;base64,{original_base64}' style='max-height: 800px; width: auto; display:block;' />
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
     st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
     coords = streamlit_image_coordinates(scaled_image, key="coord_click")
 
@@ -108,13 +120,13 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = blocks
 
-        # ✅ Overlay image — scrollable, aspect-ratio preserved
+        # Display overlay image with correct aspect ratio and scroll
         st.markdown("### 📌 Tagged OCR Overlay")
         overlay_base64 = image_to_base64(draw_img)
         st.markdown(
             f"""
             <div style='overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
-                <img src='data:image/png;base64,{overlay_base64}' style='max-width:none; height:auto; display:block;' />
+                <img src='data:image/png;base64,{overlay_base64}' style='max-height: 800px; width: auto; display:block;' />
             </div>
             """,
             unsafe_allow_html=True
