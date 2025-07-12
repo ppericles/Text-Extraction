@@ -63,7 +63,7 @@ if uploaded_file:
     scaled_image = image.resize((int(image.width * zoom), int(image.height * zoom)))
     field_boxes = st.session_state.form_layouts[form_num]
 
-    # Single tagging interface with horizontal scroll and click coordinates
+    # Tagging interface with click coordinates
     st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
     coords = streamlit_image_coordinates(
         scaled_image, 
@@ -72,15 +72,19 @@ if uploaded_file:
     )
 
     if coords:
-        x, y = coords["x"], coords["y"]
-        if st.session_state.click_stage == "start":
-            field_boxes[field_label] = {"x1": x, "y1": y}
-            st.session_state.click_stage = "end"
-            st.info(f"🟩 Top-left set for '{field_label}'. Click bottom-right.")
+        # Only process clicks if they're within the image bounds
+        if 0 <= coords["x"] < scaled_image.width and 0 <= coords["y"] < scaled_image.height:
+            x, y = coords["x"], coords["y"]
+            if st.session_state.click_stage == "start":
+                field_boxes[field_label] = {"x1": x, "y1": y}
+                st.session_state.click_stage = "end"
+                st.info(f"🟩 Top-left set for '{field_label}'. Click bottom-right.")
+            else:
+                field_boxes[field_label].update({"x2": x, "y2": y})
+                st.session_state.click_stage = "start"
+                st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
         else:
-            field_boxes[field_label].update({"x2": x, "y2": y})
-            st.session_state.click_stage = "start"
-            st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
+            st.warning("⚠️ Please click inside the image area")
 
     if cred_file:
         client = vision.ImageAnnotatorClient()
