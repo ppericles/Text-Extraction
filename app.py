@@ -18,7 +18,7 @@ def normalize(text):
     return unidecode(text.upper().strip())
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek Handwriting OCR with Auto Field Extraction & Scrollable Overlay")
+st.title("🇬🇷 Greek Handwriting OCR with Scrollable Overlay")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ",
@@ -104,12 +104,12 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = blocks
 
-        # ✅ Scrollable overlay container
+        # ✅ Scrollable overlay section
         scroll_base64 = image_to_base64(image)
         st.markdown(
             f"""
             <div style='width:100%; overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
-                <img src='data:image/png;base64,{scroll_base64}' style='height:600px; min-width:1200px; display:block;' />
+                <img src='data:image/png;base64,{scroll_base64}' style='height:600px; min-width:1600px; display:block;' />
             </div>
             """,
             unsafe_allow_html=True
