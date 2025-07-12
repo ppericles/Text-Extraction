@@ -18,14 +18,13 @@ def normalize(text):
     return unidecode(text.upper().strip())
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek Handwriting OCR with Scrollable Tagging + Overlay")
+st.title("🇬🇷 Greek Handwriting OCR with Scrollable Tagging + Auto Extraction")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ",
     "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# State
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -45,7 +44,7 @@ if field_label != st.session_state.last_selected_field:
     st.session_state.click_stage = "start"
     st.session_state.coord_click = None
 
-cred_file = st.sidebar.file_uploader("🔐 Upload Google credentials", type=["json"])
+cred_file = st.sidebar.file_uploader("🔐 Google credentials (JSON)", type=["json"])
 if cred_file:
     cred_path = "credentials.json"
     with open(cred_path, "wb") as f:
@@ -64,10 +63,11 @@ if layout_file:
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    raw_base64 = image_to_base64(image)
+    field_boxes = st.session_state.form_layouts[form_num]
 
     # 👆 Scrollable preview for tagging
-    st.markdown("### 🖱️ Click to Define Field Boxes (Top-left → Bottom-right)")
+    raw_base64 = image_to_base64(image)
+    st.markdown("### 🖱️ Click to Define Field Boxes")
     st.markdown(
         f"""
         <div style='width:100%; overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
@@ -78,7 +78,6 @@ if uploaded_file:
     )
 
     coords = streamlit_image_coordinates(image, key="coord_click")
-    field_boxes = st.session_state.form_layouts[form_num]
 
     if coords:
         x, y = coords["x"], coords["y"]
@@ -100,8 +99,8 @@ if uploaded_file:
 
         draw_img = image.copy()
         draw = ImageDraw.Draw(draw_img)
-
         blocks = []
+
         for ann in annotations[1:]:
             vertices = ann.bounding_poly.vertices
             xs = [v.x for v in vertices]
@@ -174,4 +173,17 @@ if uploaded_file:
                                 neighbor = other
                     if neighbor:
                         label = normalized_labels[txt]
-                        found[label] = neighbor["
+                        found[label] = neighbor["text"]
+            st.session_state.auto_extracted_fields = found
+
+        if st.session_state.auto_extracted_fields:
+            st.subheader("🧾 Predicted Field Mapping")
+            st.json(st.session_state.auto_extracted_fields)
+
+# 💾 Export layout
+st.download_button(
+    label="💾 Export Layout as JSON",
+    data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
+    file_name="form_layouts.json",
+    mime="application/json"
+)
