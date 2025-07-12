@@ -111,11 +111,9 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = blocks
 
-        # Overlay
         st.markdown("### 📌 Overlay Image (OCR + Field Tags)")
         st.image(draw_img, caption="Overlay with OCR and tagged fields", use_column_width=True)
 
-        # Manual extraction
         st.subheader("🧠 Extracted Field Values")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
@@ -132,7 +130,6 @@ if uploaded_file:
                     val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
 
-        # Auto extraction
         st.header("🪄 Auto-Extracted Fields")
         if st.button("🪄 Auto-Extract from OCR"):
             found = {}
