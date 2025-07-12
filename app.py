@@ -13,18 +13,20 @@ def normalize(text):
     return unidecode(text.upper().strip())
 
 def image_to_base64(img):
-    buffered = BytesIO()
-    img.save(buffered, format="PNG")
-    return base64.b64encode(buffered.getvalue()).decode()
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode()
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
 st.title("🇬🇷 Greek OCR Annotator — Scrollable Zoom + True Overlay")
 
+# Field labels
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
+# Session state
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -34,12 +36,12 @@ if "ocr_blocks" not in st.session_state:
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
 
+# Sidebar UI
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
-
 zoom = st.sidebar.slider("🔍 Zoom", min_value=0.5, max_value=2.5, value=1.5, step=0.1)
 
-cred_file = st.sidebar.file_uploader("🔐 Upload Google credentials", type=["json"])
+cred_file = st.sidebar.file_uploader("🔐 Google credentials (JSON)", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f:
         f.write(cred_file.read())
@@ -54,6 +56,7 @@ if layout_file:
     except Exception as e:
         st.sidebar.error(f"Import failed: {e}")
 
+# Image upload
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
@@ -105,7 +108,7 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = blocks
 
-        # ✅ Overlay image with preserved aspect ratio
+        # ✅ Overlay image — scrollable, aspect-ratio preserved
         st.markdown("### 📌 Tagged OCR Overlay")
         overlay_base64 = image_to_base64(draw_img)
         st.markdown(
@@ -117,6 +120,7 @@ if uploaded_file:
             unsafe_allow_html=True
         )
 
+        # Manual extraction
         st.subheader("🧠 Extracted Field Values")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
@@ -133,6 +137,7 @@ if uploaded_file:
                     val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
 
+        # Auto extraction
         st.header("🪄 Auto-Extracted Fields")
         if st.button("🪄 Auto-Extract from OCR"):
             found = {}
