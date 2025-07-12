@@ -63,19 +63,19 @@ if uploaded_file:
     scaled_image = image.resize((int(image.width * zoom), int(image.height * zoom)))
     field_boxes = st.session_state.form_layouts[form_num]
 
-    # Display original image with horizontal scroll
-    st.markdown("### 🖼️ Original Image (Scrollable)")
-    original_base64 = image_to_base64(scaled_image)
+    # Tagging interface with horizontal scroll
+    st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
+    tagging_base64 = image_to_base64(scaled_image)
     st.markdown(
         f"""
         <div style='overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
-            <img src='data:image/png;base64,{original_base64}' style='max-height: 800px; width: auto; display:block;' />
+            <img src='data:image/png;base64,{tagging_base64}' style='max-height: 800px; width: auto; display:block;' id="tagging-image" />
         </div>
         """,
         unsafe_allow_html=True
     )
-
-    st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
+    
+    # Add click coordinates handling using the same scaled image
     coords = streamlit_image_coordinates(scaled_image, key="coord_click")
 
     if coords:
@@ -120,7 +120,7 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = blocks
 
-        # Display overlay image with correct aspect ratio and scroll
+        # Tagged OCR overlay with horizontal scroll
         st.markdown("### 📌 Tagged OCR Overlay")
         overlay_base64 = image_to_base64(draw_img)
         st.markdown(
@@ -169,7 +169,7 @@ if uploaded_file:
                                 min_dist = dist
                                 neighbor = other
                     if neighbor:
-                        label = normalized_labels[txt]
+                        label = normalized_labels[txt)
                         found[label] = neighbor["text"]
             st.session_state.auto_extracted_fields = found
 
