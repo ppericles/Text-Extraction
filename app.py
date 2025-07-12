@@ -52,11 +52,10 @@ field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 def update_zoom():
     if st.session_state.original_image:
         st.session_state.current_zoom = st.session_state.zoom_slider
-        # Create scaled image - fixed parentheses
-        st.session_state.scaled_image = st.session_state.original_image.resize(
-            (int(st.session_state.original_image.width * st.session_state.current_zoom),
-            int(st.session_state.original_image.height * st.session_state.current_zoom)
-        )
+        # Create scaled image - fixed syntax
+        width = int(st.session_state.original_image.width * st.session_state.current_zoom)
+        height = int(st.session_state.original_image.height * st.session_state.current_zoom)
+        st.session_state.scaled_image = st.session_state.original_image.resize((width, height))
 
 zoom = st.sidebar.slider(
     "🔍 Zoom", 
@@ -93,11 +92,10 @@ if uploaded_file:
             st.session_state.uploaded_file_name = uploaded_file.name
             st.session_state.ocr_blocks = []
             st.session_state.auto_extracted_fields = {}
-            # Create initial scaled image - fixed parentheses
-            st.session_state.scaled_image = st.session_state.original_image.resize(
-                (int(st.session_state.original_image.width * st.session_state.current_zoom),
-                int(st.session_state.original_image.height * st.session_state.current_zoom)
-            )
+            # Create initial scaled image - fixed syntax
+            width = int(st.session_state.original_image.width * st.session_state.current_zoom)
+            height = int(st.session_state.original_image.height * st.session_state.current_zoom)
+            st.session_state.scaled_image = st.session_state.original_image.resize((width, height))
             st.success("🔄 Image loaded successfully!")
         except Exception as e:
             st.error(f"Failed to load image: {e}")
