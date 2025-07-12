@@ -17,7 +17,7 @@ def image_to_base64(img):
     img.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode()
 
-# Initialize session state
+# Initialize all session state variables
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -45,12 +45,17 @@ field_labels = [
 # Sidebar UI
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
-zoom = st.sidebar.slider("🔍 Zoom", min_value=0.5, max_value=2.5, 
-                        value=st.session_state.current_zoom, step=0.1,
-                        on_change=lambda: setattr(st.session_state, 'current_zoom', zoom))
 
-# Update zoom level in session state
-st.session_state.current_zoom = zoom
+# Zoom slider with immediate update
+zoom = st.sidebar.slider(
+    "🔍 Zoom", 
+    min_value=0.5, 
+    max_value=2.5, 
+    value=st.session_state.current_zoom, 
+    step=0.1,
+    key="zoom_slider"
+)
+st.session_state.current_zoom = zoom  # Update session state immediately
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials (JSON)", type=["json"])
 if cred_file:
@@ -71,7 +76,8 @@ if layout_file:
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     # Only process if we have a new file
-    if uploaded_file.name != st.session_state.uploaded_file_name:
+    if (uploaded_file.name != st.session_state.uploaded_file_name or 
+        st.session_state.original_image is None):
         try:
             st.session_state.original_image = Image.open(uploaded_file).convert("RGB")
             st.session_state.uploaded_file_name = uploaded_file.name
@@ -84,12 +90,13 @@ if uploaded_file:
     
     if st.session_state.original_image:
         # Create scaled version with current zoom
-        scaled_width = int(st.session_state.original_image.width * st.session_state.current_zoom)
-        scaled_height = int(st.session_state.original_image.height * st.session_state.current_zoom)
-        scaled_image = st.session_state.original_image.resize(
-            (scaled_width, scaled_height),
-            resample=Image.Resampling.LANCZOS
-        )
+        with st.spinner("Applying zoom..."):
+            scaled_width = int(st.session_state.original_image.width * st.session_state.current_zoom)
+            scaled_height = int(st.session_state.original_image.height * st.session_state.current_zoom)
+            scaled_image = st.session_state.original_image.resize(
+                (scaled_width, scaled_height),
+                resample=Image.Resampling.LANCZOS
+            )
         
         field_boxes = st.session_state.form_layouts[form_num]
 
@@ -117,37 +124,38 @@ if uploaded_file:
 
         if cred_file:
             try:
-                client = vision.ImageAnnotatorClient()
-                vision_img = vision.Image(content=uploaded_file.getvalue())
-                response = client.document_text_detection(image=vision_img)
-                annotations = response.text_annotations
+                with st.spinner("Processing OCR..."):
+                    client = vision.ImageAnnotatorClient()
+                    vision_img = vision.Image(content=uploaded_file.getvalue())
+                    response = client.document_text_detection(image=vision_img)
+                    annotations = response.text_annotations
 
-                # Create overlay on the SCALED image
-                draw_img = scaled_image.copy()
-                draw = ImageDraw.Draw(draw_img)
-                blocks = []
+                    # Create overlay on the SCALED image
+                    draw_img = scaled_image.copy()
+                    draw = ImageDraw.Draw(draw_img)
+                    blocks = []
 
-                for ann in annotations[1:]:
-                    vertices = ann.bounding_poly.vertices
-                    xs = [int(v.x * st.session_state.current_zoom) for v in vertices]
-                    ys = [int(v.y * st.session_state.current_zoom) for v in vertices]
-                    x1, x2 = min(xs), max(xs)
-                    y1, y2 = min(ys), max(ys)
-                    center = (np.mean(xs), np.mean(ys))
-                    blocks.append({"text": ann.description, "center": center})
-                    draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
-                    draw.text((x1, y1 - 10), ann.description, fill="blue")
+                    for ann in annotations[1:]:
+                        vertices = ann.bounding_poly.vertices
+                        xs = [int(v.x * st.session_state.current_zoom) for v in vertices]
+                        ys = [int(v.y * st.session_state.current_zoom) for v in vertices]
+                        x1, x2 = min(xs), max(xs)
+                        y1, y2 = min(ys), max(ys)
+                        center = (np.mean(xs), np.mean(ys))
+                        blocks.append({"text": ann.description, "center": center})
+                        draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
+                        draw.text((x1, y1 - 10), ann.description, fill="blue")
 
-                # Draw field boxes on the scaled image
-                layout = st.session_state.form_layouts[form_num]
-                for label, box in layout.items():
-                    if all(k in box for k in ("x1", "y1", "x2", "y2")):
-                        x1, y1 = box["x1"], box["y1"]
-                        x2, y2 = box["x2"], box["y2"]
-                        draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=2)
-                        draw.text((x1, y1 - 10), label, fill="green")
+                    # Draw field boxes on the scaled image
+                    layout = st.session_state.form_layouts[form_num]
+                    for label, box in layout.items():
+                        if all(k in box for k in ("x1", "y1", "x2", "y2")):
+                            x1, y1 = box["x1"], box["y1"]
+                            x2, y2 = box["x2"], box["y2"]
+                            draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=2)
+                            draw.text((x1, y1 - 10), label, fill="green")
 
-                st.session_state.ocr_blocks = blocks
+                    st.session_state.ocr_blocks = blocks
 
                 # Display the overlay (properly scaled)
                 st.markdown("### 📌 Tagged OCR Overlay")
