@@ -65,10 +65,10 @@ if uploaded_file:
         st.session_state.original_image = Image.open(uploaded_file).convert("RGB")
         st.session_state.uploaded_file_name = uploaded_file.name
     
-    # Apply zoom to the original image
+    # Apply zoom to the original image (fixed parentheses)
     scaled_image = st.session_state.original_image.resize(
         (int(st.session_state.original_image.width * zoom), 
-        (int(st.session_state.original_image.height * zoom))
+         int(st.session_state.original_image.height * zoom))
     )
     
     field_boxes = st.session_state.form_layouts[form_num]
