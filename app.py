@@ -52,11 +52,11 @@ field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 def update_zoom():
     if st.session_state.original_image:
         st.session_state.current_zoom = st.session_state.zoom_slider
-        # Force update of scaled image
+        # Force update of scaled image with LANCZOS resampling
         st.session_state.scaled_image = st.session_state.original_image.resize(
             (int(st.session_state.original_image.width * st.session_state.current_zoom),
             int(st.session_state.original_image.height * st.session_state.current_zoom),
-            resample=Image.Resampling.LANCZOS
+            Image.LANCZOS  # Changed from Image.Resampling.LANCZOS
         )
 
 zoom = st.sidebar.slider(
@@ -94,11 +94,11 @@ if uploaded_file:
             st.session_state.uploaded_file_name = uploaded_file.name
             st.session_state.ocr_blocks = []
             st.session_state.auto_extracted_fields = {}
-            # Create initial scaled image
+            # Create initial scaled image with LANCZOS resampling
             st.session_state.scaled_image = st.session_state.original_image.resize(
                 (int(st.session_state.original_image.width * st.session_state.current_zoom),
                 int(st.session_state.original_image.height * st.session_state.current_zoom),
-                resample=Image.Resampling.LANCZOS
+                Image.LANCZOS  # Changed from Image.Resampling.LANCZOS
             )
             st.success("🔄 Image loaded successfully!")
         except Exception as e:
