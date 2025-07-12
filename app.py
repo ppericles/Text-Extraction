@@ -18,14 +18,14 @@ def normalize(text):
     return unidecode(text.upper().strip())
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek Handwriting OCR — Tagging, Scroll, Auto Extraction")
+st.title("🇬🇷 Greek OCR Annotator — Scrollable Tagging & Auto Extraction")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# State
+# Initialize session state
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -37,6 +37,7 @@ if "last_selected_field" not in st.session_state:
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
 
+# Sidebar inputs
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
@@ -63,10 +64,23 @@ if layout_file:
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
+    scaled_image = image.resize((int(image.width * 1.5), image.height))
     field_boxes = st.session_state.form_layouts[form_num]
 
-    st.markdown("### 🖱️ Click on Image to Tag Fields")
-    coords = streamlit_image_coordinates(image, key="coord_click")
+    # Render scrollable tagging image manually
+    st.markdown("### 🖱️ Tagging Image (Click to Define Fields)")
+    encoded = image_to_base64(scaled_image)
+    st.markdown(
+        f"""
+        <div style='width:100%; overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
+            <img src='data:image/png;base64,{encoded}' style='height:auto; max-height:600px; width:auto; display:block;' />
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Invisible coordinate tracking
+    coords = streamlit_image_coordinates(scaled_image, key="coord_click", display=False)
 
     if coords:
         x, y = coords["x"], coords["y"]
@@ -79,21 +93,21 @@ if uploaded_file:
             st.session_state.click_stage = "start"
             st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
-    # OCR
+    # OCR processing
     if cred_file:
         client = vision.ImageAnnotatorClient()
         vision_img = vision.Image(content=uploaded_file.getvalue())
         response = client.document_text_detection(image=vision_img)
         annotations = response.text_annotations
 
-        draw_img = image.copy()
+        draw_img = scaled_image.copy()
         draw = ImageDraw.Draw(draw_img)
         blocks = []
 
         for ann in annotations[1:]:
             vertices = ann.bounding_poly.vertices
-            xs = [v.x for v in vertices]
-            ys = [v.y for v in vertices]
+            xs = [int(v.x * 1.5) for v in vertices]
+            ys = [int(v.y) for v in vertices]
             x1, x2 = min(xs), max(xs)
             y1, y2 = min(ys), max(ys)
             center = (np.mean(xs), np.mean(ys))
@@ -104,8 +118,8 @@ if uploaded_file:
         layout = st.session_state.form_layouts[form_num]
         for label, box in layout.items():
             if all(k in box for k in ("x1", "y1", "x2", "y2")):
-                x1, y1 = box["x1"], box["y1"]
-                x2, y2 = box["x2"], box["y2"]
+                x1, y1 = int(box["x1"]), int(box["y1"])
+                x2, y2 = int(box["x2"]), int(box["y2"])
                 draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=2)
                 draw.text((x1, y1 - 10), label, fill="green")
 
@@ -114,6 +128,7 @@ if uploaded_file:
         st.markdown("### 📌 Overlay Image (OCR + Field Tags)")
         st.image(draw_img, caption="Overlay with OCR and tagged fields", use_column_width=True)
 
+        # Manual extraction
         st.subheader("🧠 Extracted Field Values")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
@@ -130,6 +145,7 @@ if uploaded_file:
                     val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
 
+        # Auto extraction
         st.header("🪄 Auto-Extracted Fields")
         if st.button("🪄 Auto-Extract from OCR"):
             found = {}
