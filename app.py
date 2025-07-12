@@ -3,7 +3,6 @@ from PIL import Image, ImageDraw
 import numpy as np
 import json
 import os
-import base64
 from io import BytesIO
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -13,14 +12,14 @@ def normalize(text):
     return unidecode(text.upper().strip())
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek OCR Annotator — Scrollable Tagging & Auto Extraction")
+st.title("🇬🇷 Greek OCR Annotator — Scrollable Tagging + Auto Extraction")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# Session state initialization
+# Initialize session
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -33,7 +32,6 @@ if "auto_extracted_fields" not in st.session_state:
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-# Upload credentials
 cred_file = st.sidebar.file_uploader("🔐 Upload Google credentials", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f:
@@ -41,7 +39,6 @@ if cred_file:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
-# Upload layout
 layout_file = st.sidebar.file_uploader("📂 Import layout (.json)", type=["json"])
 if layout_file:
     try:
@@ -50,14 +47,13 @@ if layout_file:
     except Exception as e:
         st.sidebar.error(f"Import failed: {e}")
 
-# Upload scanned form
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     scaled_image = image.resize((int(image.width * 1.5), image.height))
     field_boxes = st.session_state.form_layouts[form_num]
 
-    # Tagging section with scroll and click tracking
+    # 🖱️ Tagging section
     st.markdown("### 🖱️ Click Image to Tag Fields (Top-left then Bottom-right)")
     coords = streamlit_image_coordinates(scaled_image, key="coord_click")
 
@@ -72,20 +68,21 @@ if uploaded_file:
             st.session_state.click_stage = "start"
             st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
-    # OCR logic
+    # 👁️ OCR + drawing
     if cred_file:
         client = vision.ImageAnnotatorClient()
         vision_img = vision.Image(content=uploaded_file.getvalue())
         response = client.document_text_detection(image=vision_img)
         annotations = response.text_annotations
 
+        # ✅ DRAW FIX: use .copy() safely
         draw_img = scaled_image.copy()
         draw = ImageDraw.Draw(draw_img)
         blocks = []
 
         for ann in annotations[1:]:
             vertices = ann.bounding_poly.vertices
-            xs = [int(v.x * 1.5) for v in vertices]
+            xs = [int(v.x * 1.5) for v in vertices]  # Scale for overlay
             ys = [int(v.y) for v in vertices]
             x1, x2 = min(xs), max(xs)
             y1, y2 = min(ys), max(ys)
@@ -103,12 +100,10 @@ if uploaded_file:
                 draw.text((x1, y1 - 10), label, fill="green")
 
         st.session_state.ocr_blocks = blocks
-
-        # Overlay image with boxes
         st.markdown("### 📌 Overlay with OCR + Field Tags")
         st.image(draw_img, caption="Tagged OCR overlay", use_column_width=True)
 
-        # Manual extraction
+        # 🧠 Manual extraction
         st.subheader("🧠 Extracted Field Values")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
@@ -125,7 +120,7 @@ if uploaded_file:
                     val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
 
-        # Auto extraction
+        # 🪄 Auto extraction
         st.header("🪄 Auto-Extracted Fields")
         if st.button("🪄 Auto-Extract from OCR"):
             found = {}
@@ -153,7 +148,7 @@ if uploaded_file:
             st.subheader("🧾 Predicted Field Mapping")
             st.json(st.session_state.auto_extracted_fields)
 
-# Export layout
+# 💾 Export layout
 st.download_button(
     label="💾 Export Layout as JSON",
     data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
