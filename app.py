@@ -7,8 +7,9 @@ import base64
 from io import BytesIO
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
-from unidecode import unidecode  # Helps normalize Greek text
+from unidecode import unidecode
 
+# Helper functions
 def image_to_base64(img):
     buffered = BytesIO()
     img.save(buffered, format="PNG")
@@ -17,14 +18,17 @@ def image_to_base64(img):
 def normalize(text):
     return unidecode(text.upper().strip())
 
+# Page config
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek Handwriting OCR with Auto Field Extraction")
+st.title("🇬🇷 Greek Handwriting OCR with Auto Field Extraction & Scrollable Overlay")
 
+# Field labels
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ",
     "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
+# Session state initialization
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -36,10 +40,10 @@ if "last_selected_field" not in st.session_state:
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
 
+# Sidebar controls
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-# Field switch reset
 if field_label != st.session_state.last_selected_field:
     st.session_state.last_selected_field = field_label
     st.session_state.click_stage = "start"
@@ -61,12 +65,14 @@ if layout_file:
     except Exception as e:
         st.sidebar.error(f"Import failed: {e}")
 
+# Image upload
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     draw = ImageDraw.Draw(image)
     field_boxes = st.session_state.form_layouts[form_num]
 
+    # Click tagging
     coords = streamlit_image_coordinates(image, key="coord_click")
     if coords:
         x, y = coords["x"], coords["y"]
@@ -81,6 +87,7 @@ if uploaded_file:
             st.session_state.click_stage = "start"
             st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
+    # OCR and drawing
     if cred_file:
         client = vision.ImageAnnotatorClient()
         vision_img = vision.Image(content=uploaded_file.getvalue())
@@ -105,18 +112,18 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = blocks
 
+        # 🎯 Scrollable overlay preview with annotations
         scroll_base64 = image_to_base64(image)
         st.markdown(
             f"""
-            <div style='overflow-x:auto; border:1px solid #ccc; padding:10px;'>
-                <div style='display:inline-block; white-space:nowrap;'>
-                    <img src='data:image/png;base64,{scroll_base64}' style='height:600px' />
-                </div>
+            <div style='overflow-x: auto; border: 1px solid #ccc; padding: 10px; width: 100%;'>
+                <img src='data:image/png;base64,{scroll_base64}' style='height:600px; max-width:2000px;' />
             </div>
             """,
             unsafe_allow_html=True
         )
 
+        # Tagged field extraction
         st.subheader("🧠 OCR Field Extraction (Tagged)")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
@@ -133,16 +140,16 @@ if uploaded_file:
                     val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
 
+        # 🪄 Auto Extraction
         st.markdown("---")
         st.header("🪄 Auto-Extracted Fields")
         if st.button("🪄 Auto-Extract Fields from OCR"):
             found = {}
             normalized_labels = {normalize(lbl): lbl for lbl in field_labels}
-
             for idx, block in enumerate(st.session_state.ocr_blocks):
                 txt = normalize(block["text"])
                 if txt in normalized_labels:
-                    # Try to find next neighbor to the right or below
+                    # Find neighbor block
                     ref_x, ref_y = block["center"]
                     neighbor = None
                     min_dist = float("inf")
@@ -157,13 +164,12 @@ if uploaded_file:
                     if neighbor:
                         label = normalized_labels[txt]
                         found[label] = neighbor["text"]
-
             st.session_state.auto_extracted_fields = found
 
         if st.session_state.auto_extracted_fields:
             st.json(st.session_state.auto_extracted_fields)
 
-# Export layout
+# Export
 st.download_button(
     label="💾 Export Layout as JSON",
     data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
