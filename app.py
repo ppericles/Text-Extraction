@@ -25,6 +25,7 @@ field_labels = [
     "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
+# State
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -44,7 +45,7 @@ if field_label != st.session_state.last_selected_field:
     st.session_state.click_stage = "start"
     st.session_state.coord_click = None
 
-cred_file = st.sidebar.file_uploader("🔐 Google credentials (JSON)", type=["json"])
+cred_file = st.sidebar.file_uploader("🔐 Upload Google credentials", type=["json"])
 if cred_file:
     cred_path = "credentials.json"
     with open(cred_path, "wb") as f:
@@ -65,7 +66,7 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     field_boxes = st.session_state.form_layouts[form_num]
 
-    # 👆 Scrollable preview for tagging
+    # 👆 Scrollable tagging image
     raw_base64 = image_to_base64(image)
     st.markdown("### 🖱️ Click to Define Field Boxes")
     st.markdown(
@@ -77,8 +78,7 @@ if uploaded_file:
         unsafe_allow_html=True
     )
 
-    coords = streamlit_image_coordinates(image, key="coord_click")
-
+    coords = streamlit_image_coordinates(image, key="coord_click", display=False)
     if coords:
         x, y = coords["x"], coords["y"]
         if st.session_state.click_stage == "start":
@@ -123,9 +123,9 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = blocks
 
-        # 📌 Scrollable overlay preview
+        # 📌 Scrollable overlay
         overlay_base64 = image_to_base64(draw_img)
-        st.markdown("### 📌 Scrollable Overlay with OCR & Field Layout")
+        st.markdown("### 📌 Overlay with OCR + Field Layout")
         st.markdown(
             f"""
             <div style='width:100%; overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
@@ -135,7 +135,7 @@ if uploaded_file:
             unsafe_allow_html=True
         )
 
-        # Extract text from tagged fields
+        # Tagged field extraction
         st.subheader("🧠 Extracted Field Values")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
