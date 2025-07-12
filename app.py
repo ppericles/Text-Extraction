@@ -9,11 +9,6 @@ from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
 from unidecode import unidecode
 
-def image_to_base64(img):
-    buffered = BytesIO()
-    img.save(buffered, format="PNG")
-    return base64.b64encode(buffered.getvalue()).decode()
-
 def normalize(text):
     return unidecode(text.upper().strip())
 
@@ -25,34 +20,28 @@ field_labels = [
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# Initialize session state
+# Session state initialization
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
     st.session_state.click_stage = "start"
 if "ocr_blocks" not in st.session_state:
     st.session_state.ocr_blocks = []
-if "last_selected_field" not in st.session_state:
-    st.session_state.last_selected_field = None
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
 
-# Sidebar inputs
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-if field_label != st.session_state.last_selected_field:
-    st.session_state.last_selected_field = field_label
-    st.session_state.click_stage = "start"
-
+# Upload credentials
 cred_file = st.sidebar.file_uploader("🔐 Upload Google credentials", type=["json"])
 if cred_file:
-    cred_path = "credentials.json"
-    with open(cred_path, "wb") as f:
+    with open("credentials.json", "wb") as f:
         f.write(cred_file.read())
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = cred_path
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
+# Upload layout
 layout_file = st.sidebar.file_uploader("📂 Import layout (.json)", type=["json"])
 if layout_file:
     try:
@@ -61,26 +50,16 @@ if layout_file:
     except Exception as e:
         st.sidebar.error(f"Import failed: {e}")
 
+# Upload scanned form
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     scaled_image = image.resize((int(image.width * 1.5), image.height))
     field_boxes = st.session_state.form_layouts[form_num]
 
-    # Render scrollable tagging image manually
-    st.markdown("### 🖱️ Tagging Image (Click to Define Fields)")
-    encoded = image_to_base64(scaled_image)
-    st.markdown(
-        f"""
-        <div style='width:100%; overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
-            <img src='data:image/png;base64,{encoded}' style='height:auto; max-height:600px; width:auto; display:block;' />
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    # Invisible coordinate tracking
-    coords = streamlit_image_coordinates(scaled_image, key="coord_click", display=False)
+    # Tagging section with scroll and click tracking
+    st.markdown("### 🖱️ Click Image to Tag Fields (Top-left then Bottom-right)")
+    coords = streamlit_image_coordinates(scaled_image, key="coord_click")
 
     if coords:
         x, y = coords["x"], coords["y"]
@@ -93,7 +72,7 @@ if uploaded_file:
             st.session_state.click_stage = "start"
             st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
-    # OCR processing
+    # OCR logic
     if cred_file:
         client = vision.ImageAnnotatorClient()
         vision_img = vision.Image(content=uploaded_file.getvalue())
@@ -118,15 +97,16 @@ if uploaded_file:
         layout = st.session_state.form_layouts[form_num]
         for label, box in layout.items():
             if all(k in box for k in ("x1", "y1", "x2", "y2")):
-                x1, y1 = int(box["x1"]), int(box["y1"])
-                x2, y2 = int(box["x2"]), int(box["y2"])
+                x1, y1 = box["x1"], box["y1"]
+                x2, y2 = box["x2"], box["y2"]
                 draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=2)
                 draw.text((x1, y1 - 10), label, fill="green")
 
         st.session_state.ocr_blocks = blocks
 
-        st.markdown("### 📌 Overlay Image (OCR + Field Tags)")
-        st.image(draw_img, caption="Overlay with OCR and tagged fields", use_column_width=True)
+        # Overlay image with boxes
+        st.markdown("### 📌 Overlay with OCR + Field Tags")
+        st.image(draw_img, caption="Tagged OCR overlay", use_column_width=True)
 
         # Manual extraction
         st.subheader("🧠 Extracted Field Values")
