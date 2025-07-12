@@ -79,7 +79,7 @@ if uploaded_file:
             # Create scaled version and store in session state (fixed parentheses)
             st.session_state.scaled_image = st.session_state.original_image.resize(
                 (int(st.session_state.original_image.width * zoom), 
-                int(st.session_state.original_image.height * zoom)
+                 int(st.session_state.original_image.height * zoom))
             )
             
             st.session_state.ocr_blocks = []
