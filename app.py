@@ -65,19 +65,21 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     field_boxes = st.session_state.form_layouts[form_num]
 
-    # 🖼️ Scrollable HTML Tagging Image
-    base64_img = image_to_base64(image)
-    st.markdown("### 🖱️ Click to Tag Fields (Top-left then Bottom-right)")
+    # Scrollable tagging image (single visible render)
+    st.markdown("### 🖱️ Tagging Image (Click to Define Fields)")
+    image_base64 = image_to_base64(image)
     st.markdown(
         f"""
-        <div style='width:100%; overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
-            <img src='data:image/png;base64,{base64_img}' style='height:auto; max-height:600px; width:auto; display:block;' />
+        <div style='width:100%; overflow-x:auto; border:1px solid #ccc;
+                    padding:10px; white-space:nowrap;'>
+            <img src='data:image/png;base64,{image_base64}' 
+                 style='height:auto; max-height:600px; width:auto; display:block;' />
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    # 🎯 Coordinate Tracker (Invisible Image Component)
+    # Coordinate tracking (hidden view, no duplicate)
     coords = streamlit_image_coordinates(image, key="coord_click", display=False)
     if coords:
         x, y = coords["x"], coords["y"]
@@ -90,7 +92,7 @@ if uploaded_file:
             st.session_state.click_stage = "start"
             st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
-    # 🧠 Run OCR
+    # OCR detection and overlay
     if cred_file:
         client = vision.ImageAnnotatorClient()
         vision_img = vision.Image(content=uploaded_file.getvalue())
@@ -122,19 +124,21 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = blocks
 
-        # 📌 Scrollable Annotated Image
+        # Scrollable overlay image
         overlay_base64 = image_to_base64(draw_img)
-        st.markdown("### 📌 Overlay Image (OCR + Field Layout)")
+        st.markdown("### 📌 Overlay Image (OCR + Field Tags)")
         st.markdown(
             f"""
-            <div style='width:100%; overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
-                <img src='data:image/png;base64,{overlay_base64}' style='height:auto; max-height:600px; width:auto; display:block;' />
+            <div style='width:100%; overflow-x:auto; border:1px solid #ccc;
+                        padding:10px; white-space:nowrap;'>
+                <img src='data:image/png;base64,{overlay_base64}' 
+                     style='height:auto; max-height:600px; width:auto; display:block;' />
             </div>
             """,
             unsafe_allow_html=True
         )
 
-        # 🧠 Tagged Field Extraction
+        # Manual extraction from tagged boxes
         st.subheader("🧠 Extracted Field Values")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
@@ -151,7 +155,7 @@ if uploaded_file:
                     val = " ".join(matches) if matches else "(no match)"
                     st.text_input(label, val, key=f"{i}_{label}")
 
-        # 🪄 Auto-Extracted Fields
+        # Auto extraction
         st.header("🪄 Auto-Extracted Fields")
         if st.button("🪄 Auto-Extract from OCR"):
             found = {}
@@ -179,7 +183,7 @@ if uploaded_file:
             st.subheader("🧾 Predicted Field Mapping")
             st.json(st.session_state.auto_extracted_fields)
 
-# 💾 Export layout
+# Export layout as JSON
 st.download_button(
     label="💾 Export Layout as JSON",
     data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
