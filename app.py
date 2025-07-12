@@ -46,7 +46,7 @@ field_labels = [
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-# Zoom slider that directly controls the displayed image size
+# Zoom slider with direct control
 zoom = st.sidebar.slider(
     "🔍 Zoom", 
     min_value=0.5, 
@@ -165,9 +165,58 @@ if uploaded_file:
                     unsafe_allow_html=True
                 )
 
-                # [Rest of your extraction code remains unchanged...]
+                # Manual extraction
+                st.subheader("🧠 Extracted Field Values")
+                for i in [1, 2, 3]:
+                    st.markdown(f"### 📄 Φόρμα {i}")
+                    layout = st.session_state.form_layouts[i]
+                    for label in field_labels:
+                        box = layout.get(label)
+                        if box and all(k in box for k in ("x1", "y1", "x2", "y2")):
+                            xmin, xmax = sorted([box["x1"], box["x2"]])
+                            ymin, ymax = sorted([box["y1"], box["y2"]])
+                            matches = [
+                                b["text"] for b in st.session_state.ocr_blocks
+                                if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax
+                            ]
+                            val = " ".join(matches) if matches else "(no match)"
+                            st.text_input(label, val, key=f"{i}_{label}")
+
+                # Auto extraction
+                st.header("🪄 Auto-Extracted Fields")
+                if st.button("🪄 Auto-Extract from OCR"):
+                    found = {}
+                    normalized_labels = {normalize(lbl): lbl for lbl in field_labels}
+                    for idx, block in enumerate(st.session_state.ocr_blocks):
+                        txt = normalize(block["text"])
+                        if txt in normalized_labels:
+                            ref_x, ref_y = block["center"]
+                            neighbor = None
+                            min_dist = float("inf")
+                            for other in st.session_state.ocr_blocks[idx+1:]:
+                                dx = other["center"][0] - ref_x
+                                dy = other["center"][1] - ref_y
+                                if dx >= 0 and dy >= 0:
+                                    dist = np.sqrt(dx**2 + dy**2)
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        neighbor = other
+                            if neighbor:
+                                label = normalized_labels[txt]
+                                found[label] = neighbor["text"]
+                    st.session_state.auto_extracted_fields = found
+
+                if st.session_state.auto_extracted_fields:
+                    st.subheader("🧾 Predicted Field Mapping")
+                    st.json(st.session_state.auto_extracted_fields)
 
             except Exception as e:
                 st.error(f"OCR processing failed: {e}")
 
-# [Rest of your export code remains unchanged...]
+# Export layout
+st.download_button(
+    label="💾 Export Layout as JSON",
+    data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
+    file_name="form_layouts.json",
+    mime="application/json"
+)
