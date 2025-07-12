@@ -35,6 +35,8 @@ if "ocr_blocks" not in st.session_state:
     st.session_state.ocr_blocks = []
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
+if "original_image" not in st.session_state:
+    st.session_state.original_image = None
 
 # Sidebar UI
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
@@ -59,15 +61,23 @@ if layout_file:
 # Image upload
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    scaled_image = image.resize((int(image.width * zoom), int(image.height * zoom)))
+    if "original_image" not in st.session_state or st.session_state.uploaded_file_name != uploaded_file.name:
+        st.session_state.original_image = Image.open(uploaded_file).convert("RGB")
+        st.session_state.uploaded_file_name = uploaded_file.name
+    
+    # Apply zoom to the original image
+    scaled_image = st.session_state.original_image.resize(
+        (int(st.session_state.original_image.width * zoom), 
+        (int(st.session_state.original_image.height * zoom))
+    )
+    
     field_boxes = st.session_state.form_layouts[form_num]
 
     # Tagging interface with click coordinates
     st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
     coords = streamlit_image_coordinates(
         scaled_image, 
-        key="coord_click",
+        key=f"coord_click_{zoom}",  # Include zoom in key to force refresh
         height=min(800, scaled_image.height)
     )
 
