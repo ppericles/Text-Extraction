@@ -30,8 +30,8 @@ if "original_image" not in st.session_state:
     st.session_state.original_image = None
 if "uploaded_file_name" not in st.session_state:
     st.session_state.uploaded_file_name = ""
-if "last_zoom" not in st.session_state:
-    st.session_state.last_zoom = 1.0
+if "current_zoom" not in st.session_state:
+    st.session_state.current_zoom = 1.0
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
 st.title("🇬🇷 Greek OCR Annotator — Scrollable Zoom + True Overlay")
@@ -45,7 +45,12 @@ field_labels = [
 # Sidebar UI
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
-zoom = st.sidebar.slider("🔍 Zoom", min_value=0.5, max_value=2.5, value=1.5, step=0.1)
+zoom = st.sidebar.slider("🔍 Zoom", min_value=0.5, max_value=2.5, 
+                        value=st.session_state.current_zoom, step=0.1,
+                        on_change=lambda: setattr(st.session_state, 'current_zoom', zoom))
+
+# Update zoom level in session state
+st.session_state.current_zoom = zoom
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials (JSON)", type=["json"])
 if cred_file:
@@ -70,7 +75,6 @@ if uploaded_file:
         try:
             st.session_state.original_image = Image.open(uploaded_file).convert("RGB")
             st.session_state.uploaded_file_name = uploaded_file.name
-            st.session_state.last_zoom = zoom
             st.session_state.ocr_blocks = []
             st.session_state.auto_extracted_fields = {}
             st.success("🔄 Image loaded successfully!")
@@ -79,10 +83,11 @@ if uploaded_file:
             st.stop()
     
     if st.session_state.original_image:
-        # Create scaled version
+        # Create scaled version with current zoom
+        scaled_width = int(st.session_state.original_image.width * st.session_state.current_zoom)
+        scaled_height = int(st.session_state.original_image.height * st.session_state.current_zoom)
         scaled_image = st.session_state.original_image.resize(
-            (int(st.session_state.original_image.width * zoom), 
-            int(st.session_state.original_image.height * zoom)),
+            (scaled_width, scaled_height),
             resample=Image.Resampling.LANCZOS
         )
         
@@ -92,12 +97,12 @@ if uploaded_file:
         st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
         coords = streamlit_image_coordinates(
             scaled_image, 
-            key=f"coord_click_{zoom}",
-            height=min(800, scaled_image.height)
+            key=f"coord_click_{st.session_state.current_zoom}",
+            height=min(800, scaled_height)
         )
 
         if coords:
-            if 0 <= coords["x"] < scaled_image.width and 0 <= coords["y"] < scaled_image.height:
+            if 0 <= coords["x"] < scaled_width and 0 <= coords["y"] < scaled_height:
                 x, y = coords["x"], coords["y"]
                 if st.session_state.click_stage == "start":
                     field_boxes[field_label] = {"x1": x, "y1": y}
@@ -117,16 +122,15 @@ if uploaded_file:
                 response = client.document_text_detection(image=vision_img)
                 annotations = response.text_annotations
 
-                # Create overlay on the SCALED image (FIXED: using scaled_image instead of original)
+                # Create overlay on the SCALED image
                 draw_img = scaled_image.copy()
                 draw = ImageDraw.Draw(draw_img)
                 blocks = []
 
                 for ann in annotations[1:]:
                     vertices = ann.bounding_poly.vertices
-                    # Scale coordinates according to current zoom level
-                    xs = [int(v.x * zoom) for v in vertices]
-                    ys = [int(v.y * zoom) for v in vertices]
+                    xs = [int(v.x * st.session_state.current_zoom) for v in vertices]
+                    ys = [int(v.y * st.session_state.current_zoom) for v in vertices]
                     x1, x2 = min(xs), max(xs)
                     y1, y2 = min(ys), max(ys)
                     center = (np.mean(xs), np.mean(ys))
@@ -145,7 +149,7 @@ if uploaded_file:
 
                 st.session_state.ocr_blocks = blocks
 
-                # Display the overlay (now properly scaled)
+                # Display the overlay (properly scaled)
                 st.markdown("### 📌 Tagged OCR Overlay")
                 overlay_base64 = image_to_base64(draw_img)
                 st.markdown(
