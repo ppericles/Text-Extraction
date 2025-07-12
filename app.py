@@ -18,13 +18,14 @@ def normalize(text):
     return unidecode(text.upper().strip())
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek OCR Annotator with Scrollable Tagging + Auto Extraction")
+st.title("🇬🇷 Greek Handwriting OCR — Tagging, Scroll, Auto Extraction")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
+# State
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -42,9 +43,8 @@ field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 if field_label != st.session_state.last_selected_field:
     st.session_state.last_selected_field = field_label
     st.session_state.click_stage = "start"
-    st.session_state.coord_click = None
 
-cred_file = st.sidebar.file_uploader("🔐 Google credentials (JSON)", type=["json"])
+cred_file = st.sidebar.file_uploader("🔐 Upload Google credentials", type=["json"])
 if cred_file:
     cred_path = "credentials.json"
     with open(cred_path, "wb") as f:
@@ -65,22 +65,9 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     field_boxes = st.session_state.form_layouts[form_num]
 
-    # Scrollable tagging image (single visible render)
-    st.markdown("### 🖱️ Tagging Image (Click to Define Fields)")
-    image_base64 = image_to_base64(image)
-    st.markdown(
-        f"""
-        <div style='width:100%; overflow-x:auto; border:1px solid #ccc;
-                    padding:10px; white-space:nowrap;'>
-            <img src='data:image/png;base64,{image_base64}' 
-                 style='height:auto; max-height:600px; width:auto; display:block;' />
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.markdown("### 🖱️ Click on Image to Tag Fields")
+    coords = streamlit_image_coordinates(image, key="coord_click")
 
-    # Coordinate tracking (hidden view, no duplicate)
-    coords = streamlit_image_coordinates(image, key="coord_click", display=False)
     if coords:
         x, y = coords["x"], coords["y"]
         if st.session_state.click_stage == "start":
@@ -92,7 +79,7 @@ if uploaded_file:
             st.session_state.click_stage = "start"
             st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
-    # OCR detection and overlay
+    # OCR
     if cred_file:
         client = vision.ImageAnnotatorClient()
         vision_img = vision.Image(content=uploaded_file.getvalue())
@@ -124,21 +111,11 @@ if uploaded_file:
 
         st.session_state.ocr_blocks = blocks
 
-        # Scrollable overlay image
-        overlay_base64 = image_to_base64(draw_img)
+        # Overlay
         st.markdown("### 📌 Overlay Image (OCR + Field Tags)")
-        st.markdown(
-            f"""
-            <div style='width:100%; overflow-x:auto; border:1px solid #ccc;
-                        padding:10px; white-space:nowrap;'>
-                <img src='data:image/png;base64,{overlay_base64}' 
-                     style='height:auto; max-height:600px; width:auto; display:block;' />
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        st.image(draw_img, caption="Overlay with OCR and tagged fields", use_column_width=True)
 
-        # Manual extraction from tagged boxes
+        # Manual extraction
         st.subheader("🧠 Extracted Field Values")
         for i in [1, 2, 3]:
             st.markdown(f"### 📄 Φόρμα {i}")
@@ -183,7 +160,7 @@ if uploaded_file:
             st.subheader("🧾 Predicted Field Mapping")
             st.json(st.session_state.auto_extracted_fields)
 
-# Export layout as JSON
+# Export layout
 st.download_button(
     label="💾 Export Layout as JSON",
     data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
