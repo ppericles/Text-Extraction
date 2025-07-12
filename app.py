@@ -32,6 +32,8 @@ if "uploaded_file_name" not in st.session_state:
     st.session_state.uploaded_file_name = ""
 if "scaled_image" not in st.session_state:
     st.session_state.scaled_image = None
+if "last_zoom" not in st.session_state:
+    st.session_state.last_zoom = 1.0
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
 st.title("🇬🇷 Greek OCR Annotator — Scrollable Zoom + True Overlay")
@@ -67,7 +69,6 @@ uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg"
 if uploaded_file:
     # Only process if we have a new file or zoom has changed
     if (uploaded_file.name != st.session_state.uploaded_file_name or 
-        "last_zoom" not in st.session_state or 
         st.session_state.last_zoom != zoom):
         
         try:
@@ -75,7 +76,7 @@ if uploaded_file:
             st.session_state.uploaded_file_name = uploaded_file.name
             st.session_state.last_zoom = zoom
             
-            # Create scaled version and store in session state
+            # Create scaled version and store in session state (fixed parentheses)
             st.session_state.scaled_image = st.session_state.original_image.resize(
                 (int(st.session_state.original_image.width * zoom), 
                 int(st.session_state.original_image.height * zoom)
@@ -159,8 +160,50 @@ if uploaded_file:
                     unsafe_allow_html=True
                 )
 
-                # Rest of your extraction code...
-                # [Previous extraction code remains unchanged]
+                # Manual extraction
+                st.subheader("🧠 Extracted Field Values")
+                for i in [1, 2, 3]:
+                    st.markdown(f"### 📄 Φόρμα {i}")
+                    layout = st.session_state.form_layouts[i]
+                    for label in field_labels:
+                        box = layout.get(label)
+                        if box and all(k in box for k in ("x1", "y1", "x2", "y2")):
+                            xmin, xmax = sorted([box["x1"], box["x2"]])
+                            ymin, ymax = sorted([box["y1"], box["y2"]])
+                            matches = [
+                                b["text"] for b in st.session_state.ocr_blocks
+                                if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax
+                            ]
+                            val = " ".join(matches) if matches else "(no match)"
+                            st.text_input(label, val, key=f"{i}_{label}")
+
+                # Auto extraction
+                st.header("🪄 Auto-Extracted Fields")
+                if st.button("🪄 Auto-Extract from OCR"):
+                    found = {}
+                    normalized_labels = {normalize(lbl): lbl for lbl in field_labels}
+                    for idx, block in enumerate(st.session_state.ocr_blocks):
+                        txt = normalize(block["text"])
+                        if txt in normalized_labels:
+                            ref_x, ref_y = block["center"]
+                            neighbor = None
+                            min_dist = float("inf")
+                            for other in st.session_state.ocr_blocks[idx+1:]:
+                                dx = other["center"][0] - ref_x
+                                dy = other["center"][1] - ref_y
+                                if dx >= 0 and dy >= 0:
+                                    dist = np.sqrt(dx**2 + dy**2)
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        neighbor = other
+                            if neighbor:
+                                label = normalized_labels[txt]
+                                found[label] = neighbor["text"]
+                    st.session_state.auto_extracted_fields = found
+
+                if st.session_state.auto_extracted_fields:
+                    st.subheader("🧾 Predicted Field Mapping")
+                    st.json(st.session_state.auto_extracted_fields)
 
             except Exception as e:
                 st.error(f"OCR processing failed: {e}")
