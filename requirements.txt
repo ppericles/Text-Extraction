@@ -2,6 +2,6 @@ streamlit
 google-cloud-vision
 Pillow
 numpy
-streamlit-image-coordinates
 unidecode
 streamlit-drawable-canvas
+streamlit-image-coordinates
