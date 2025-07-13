@@ -3,15 +3,14 @@ from PIL import Image, ImageDraw
 import json
 import os
 from google.cloud import vision
-from streamlit_image_coordinates import streamlit_image_coordinates
+from streamlit_drawable_canvas import st_canvas
 
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
 from utils.image_utils import image_to_base64
 from utils.layout_utils import get_form_bounding_box
-from utils.tagging_utils import handle_click
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek OCR Annotator — Modular Edition")
+st.title("🇬🇷 Greek OCR Annotator — Drag-to-Tag Edition")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
@@ -20,15 +19,13 @@ field_labels = [
 
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
-if "click_stage" not in st.session_state:
-    st.session_state.click_stage = "start"
 if "ocr_blocks" not in st.session_state:
     st.session_state.ocr_blocks = []
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
 
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
-field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
+selected_label = st.sidebar.selectbox("📝 Select Field Label", field_labels)
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
 if cred_file:
@@ -51,17 +48,27 @@ if uploaded_file:
     width, height = image.size
     field_boxes = st.session_state.form_layouts[form_num]
 
-    st.markdown("### 🖱️ Manual Tagging")
-    coords = streamlit_image_coordinates(image, key="coord_click", height=height)
+    st.markdown("### 🖱️ Drag to Tag Field Regions")
+    canvas_result = st_canvas(
+        fill_color="rgba(0, 255, 0, 0.3)",
+        stroke_width=2,
+        stroke_color="green",
+        background_image=image,
+        height=height,
+        width=width,
+        drawing_mode="rect",
+        key="canvas"
+    )
 
-    if coords:
-        result = handle_click(coords, width, height, field_label, field_boxes, st.session_state)
-        if result == "outside":
-            st.warning("⚠️ Click outside image bounds")
-        elif result == "start":
-            st.info(f"🟩 Top-left set for '{field_label}'")
-        else:
-            st.success(f"✅ Box saved for '{field_label}'")
+    # Save latest box
+    if canvas_result.json_data and canvas_result.json_data["objects"]:
+        latest = canvas_result.json_data["objects"][-1]
+        x1 = int(latest["left"])
+        y1 = int(latest["top"])
+        x2 = x1 + int(latest["width"])
+        y2 = y1 + int(latest["height"])
+        field_boxes[selected_label] = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+        st.success(f"✅ Box saved for '{selected_label}' in Φόρμα {form_num}")
 
     if cred_file:
         try:
@@ -88,7 +95,6 @@ if uploaded_file:
                     draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=1)
                     draw.text((x1, y1 - 10), ann.description, fill="blue")
 
-                # Draw header boxes
                 for label in field_labels:
                     box = field_boxes.get(label)
                     if box and all(k in box for k in ("x1", "y1", "x2", "y2")):
@@ -97,16 +103,15 @@ if uploaded_file:
                         draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=3)
                         draw.text((x1, y1 - 12), label, fill="green")
 
-                # Draw full form bounding box
-                form_bounds = compute_form_bounds(field_boxes)
-                if form_bounds:
-                    x_min, y_min, x_max, y_max = form_bounds
+                bounds = compute_form_bounds(field_boxes)
+                if bounds:
+                    x_min, y_min, x_max, y_max = bounds
                     draw.rectangle([(x_min, y_min), (x_max, y_max)], outline="green", width=4)
                     draw.text((x_min, y_min - 30), f"Φόρμα {form_num}", fill="green")
 
                 st.session_state.ocr_blocks = blocks
 
-            st.markdown("### 📌 Tagged Overlay")
+            st.markdown("### 📌 Tagged Overlay Image")
             overlay_base64 = image_to_base64(draw_img)
             st.markdown(
                 f"""
