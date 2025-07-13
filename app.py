@@ -20,13 +20,12 @@ def image_to_base64(img):
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
 st.title("🇬🇷 Greek OCR Annotator — Scrollable Zoom + True Overlay")
 
-# Field labels
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# Session state
+# Session state init
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -35,13 +34,23 @@ if "ocr_blocks" not in st.session_state:
     st.session_state.ocr_blocks = []
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
+if "original_image" not in st.session_state:
+    st.session_state.original_image = None
+if "uploaded_file_name" not in st.session_state:
+    st.session_state.uploaded_file_name = ""
+if "current_zoom" not in st.session_state:
+    st.session_state.current_zoom = 1.5
 
-# Sidebar
+# Sidebar controls
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
-zoom = st.sidebar.slider("🔍 Zoom", min_value=0.5, max_value=2.5, value=1.5, step=0.1)
+zoom = st.sidebar.slider("🔍 Zoom", 0.5, 2.5, st.session_state.current_zoom, 0.1)
 
-cred_file = st.sidebar.file_uploader("🔐 Upload Google credentials", type=["json"])
+if zoom != st.session_state.current_zoom:
+    st.session_state.current_zoom = zoom
+    st.experimental_rerun()
+
+cred_file = st.sidebar.file_uploader("🔐 Google credentials (JSON)", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f:
         f.write(cred_file.read())
@@ -58,119 +67,129 @@ if layout_file:
 
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    scaled_image = image.resize((int(image.width * zoom), int(image.height * zoom)))
-    field_boxes = st.session_state.form_layouts[form_num]
+    if uploaded_file.name != st.session_state.uploaded_file_name:
+        try:
+            st.session_state.original_image = Image.open(uploaded_file).convert("RGB")
+            st.session_state.uploaded_file_name = uploaded_file.name
+            st.session_state.ocr_blocks = []
+            st.session_state.auto_extracted_fields = {}
+            st.success("🔄 Image loaded successfully!")
+        except Exception as e:
+            st.error(f"Failed to load image: {e}")
+            st.stop()
 
-    # 🖱️ Tagging Image with Zoom
-    st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
-    coords = streamlit_image_coordinates(
-        scaled_image,
-        key=f"coord_click_{zoom}",
-        height=min(800, scaled_image.height)
-    )
+    if st.session_state.original_image:
+        img = st.session_state.original_image
+        zoom_factor = st.session_state.current_zoom
+        width, height = int(img.width * zoom_factor), int(img.height * zoom_factor)
+        scaled_image = img.resize((width, height), Image.LANCZOS)
+        field_boxes = st.session_state.form_layouts[form_num]
 
-    if coords:
-        x, y = coords["x"], coords["y"]
-        if st.session_state.click_stage == "start":
-            field_boxes[field_label] = {"x1": x, "y1": y}
-            st.session_state.click_stage = "end"
-            st.info(f"🟩 Top-left set for '{field_label}'. Click bottom-right.")
-        else:
-            field_boxes[field_label].update({"x2": x, "y2": y})
-            st.session_state.click_stage = "start"
-            st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
+        st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
+        coords = streamlit_image_coordinates(scaled_image, key="coord_click", height=min(800, height))
 
-    # 🧠 OCR and Overlay Drawing
-    if cred_file:
-        client = vision.ImageAnnotatorClient()
-        vision_img = vision.Image(content=uploaded_file.getvalue())
-        response = client.document_text_detection(image=vision_img)
-        annotations = response.text_annotations
+        if coords and 0 <= coords["x"] < width and 0 <= coords["y"] < height:
+            x, y = coords["x"], coords["y"]
+            if st.session_state.click_stage == "start":
+                field_boxes[field_label] = {"x1": x, "y1": y}
+                st.session_state.click_stage = "end"
+                st.info(f"🟩 Top-left set for '{field_label}'. Click bottom-right.")
+            else:
+                field_boxes[field_label].update({"x2": x, "y2": y})
+                st.session_state.click_stage = "start"
+                st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
-        draw_img = scaled_image.copy()
-        draw = ImageDraw.Draw(draw_img)
-        blocks = []
+        if cred_file:
+            try:
+                with st.spinner("🔍 Running OCR..."):
+                    client = vision.ImageAnnotatorClient()
+                    vision_img = vision.Image(content=uploaded_file.getvalue())
+                    response = client.document_text_detection(image=vision_img)
+                    annotations = response.text_annotations
 
-        for ann in annotations[1:]:
-            vertices = ann.bounding_poly.vertices
-            xs = [int(v.x * zoom) for v in vertices]
-            ys = [int(v.y * zoom) for v in vertices]
-            x1, x2 = min(xs), max(xs)
-            y1, y2 = min(ys), max(ys)
-            center = (np.mean(xs), np.mean(ys))
-            blocks.append({"text": ann.description, "center": center})
-            draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
-            draw.text((x1, y1 - 10), ann.description, fill="blue")
+                    draw_img = scaled_image.copy()
+                    draw = ImageDraw.Draw(draw_img)
+                    blocks = []
 
-        layout = st.session_state.form_layouts[form_num]
-        for label, box in layout.items():
-            if all(k in box for k in ("x1", "y1", "x2", "y2")):
-                x1, y1 = box["x1"], box["y1"]
-                x2, y2 = box["x2"], box["y2"]
-                draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=2)
-                draw.text((x1, y1 - 10), label, fill="green")
+                    for ann in annotations[1:]:
+                        vertices = ann.bounding_poly.vertices
+                        xs = [int(v.x * zoom_factor) for v in vertices]
+                        ys = [int(v.y * zoom_factor) for v in vertices]
+                        x1, x2 = min(xs), max(xs)
+                        y1, y2 = min(ys), max(ys)
+                        center = (np.mean(xs), np.mean(ys))
+                        blocks.append({"text": ann.description, "center": center})
+                        draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
+                        draw.text((x1, y1 - 10), ann.description, fill="blue")
 
-        st.session_state.ocr_blocks = blocks
+                    layout = st.session_state.form_layouts[form_num]
+                    for label, box in layout.items():
+                        if all(k in box for k in ("x1", "y1", "x2", "y2")):
+                            x1, y1 = box["x1"], box["y1"]
+                            x2, y2 = box["x2"], box["y2"]
+                            draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=2)
+                            draw.text((x1, y1 - 10), label, fill="green")
 
-        # 📌 Scrollable OCR Overlay
-        st.markdown("### 📌 Tagged OCR Overlay")
-        overlay_base64 = image_to_base64(draw_img)
-        st.markdown(
-            f"""
-            <div style='overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
-                <img src='data:image/png;base64,{overlay_base64}' style='max-height:800px; width:auto; display:block;' />
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+                    st.session_state.ocr_blocks = blocks
 
-        # Manual extraction
-        st.subheader("🧠 Extracted Field Values")
-        for i in [1, 2, 3]:
-            st.markdown(f"### 📄 Φόρμα {i}")
-            layout = st.session_state.form_layouts[i]
-            for label in field_labels:
-                box = layout.get(label)
-                if box and all(k in box for k in ("x1", "y1", "x2", "y2")):
-                    xmin, xmax = sorted([box["x1"], box["x2"]])
-                    ymin, ymax = sorted([box["y1"], box["y2"]])
-                    matches = [
-                        b["text"] for b in st.session_state.ocr_blocks
-                        if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax
-                    ]
-                    val = " ".join(matches) if matches else "(no match)"
-                    st.text_input(label, val, key=f"{i}_{label}")
+                st.markdown("### 📌 Tagged OCR Overlay")
+                overlay_base64 = image_to_base64(draw_img)
+                st.markdown(
+                    f"""
+                    <div style='overflow-x:auto; border:1px solid #ccc; padding:10px; white-space:nowrap;'>
+                        <img src='data:image/png;base64,{overlay_base64}' style='max-height:800px; width:auto; display:block;' />
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
-        # Auto extraction
-        st.header("🪄 Auto-Extracted Fields")
-        if st.button("🪄 Auto-Extract from OCR"):
-            found = {}
-            normalized_labels = {normalize(lbl): lbl for lbl in field_labels}
-            for idx, block in enumerate(st.session_state.ocr_blocks):
-                txt = normalize(block["text"])
-                if txt in normalized_labels:
-                    ref_x, ref_y = block["center"]
-                    neighbor = None
-                    min_dist = float("inf")
-                    for other in st.session_state.ocr_blocks[idx+1:]:
-                        dx = other["center"][0] - ref_x
-                        dy = other["center"][1] - ref_y
-                        if dx >= 0 and dy >= 0:
-                            dist = np.sqrt(dx**2 + dy**2)
-                            if dist < min_dist:
-                                min_dist = dist
-                                neighbor = other
-                    if neighbor:
-                        label = normalized_labels[txt]
-                        found[label] = neighbor["text"]
-            st.session_state.auto_extracted_fields = found
+                st.subheader("🧠 Extracted Field Values")
+                for i in [1, 2, 3]:
+                    st.markdown(f"### 📄 Φόρμα {i}")
+                    layout = st.session_state.form_layouts[i]
+                    for label in field_labels:
+                        box = layout.get(label)
+                        if box and all(k in box for k in ("x1", "y1", "x2", "y2")):
+                            xmin, xmax = sorted([box["x1"], box["x2"]])
+                            ymin, ymax = sorted([box["y1"], box["y2"]])
+                            matches = [
+                                b["text"] for b in st.session_state.ocr_blocks
+                                if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax
+                            ]
+                            val = " ".join(matches) if matches else "(no match)"
+                            st.text_input(label, val, key=f"{i}_{label}")
 
-        if st.session_state.auto_extracted_fields:
-            st.subheader("🧾 Predicted Field Mapping")
-            st.json(st.session_state.auto_extracted_fields)
+                st.header("🪄 Auto-Extracted Fields")
+                if st.button("🪄 Auto-Extract from OCR"):
+                    found = {}
+                    normalized_labels = {normalize(lbl): lbl for lbl in field_labels}
+                    for idx, block in enumerate(st.session_state.ocr_blocks):
+                        txt = normalize(block["text"])
+                        if txt in normalized_labels:
+                            ref_x, ref_y = block["center"]
+                            neighbor = None
+                            min_dist = float("inf")
+                            for other in st.session_state.ocr_blocks[idx+1:]:
+                                dx = other["center"][0] - ref_x
+                                                                dy = other["center"][1] - ref_y
+                                if dx >= 0 and dy >= 0:
+                                    dist = np.sqrt(dx**2 + dy**2)
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        neighbor = other
+                            if neighbor:
+                                label = normalized_labels[txt]
+                                found[label] = neighbor["text"]
+                    st.session_state.auto_extracted_fields = found
 
-# 💾 Export layout
+                if st.session_state.auto_extracted_fields:
+                    st.subheader("🧾 Predicted Field Mapping")
+                    st.json(st.session_state.auto_extracted_fields)
+
+            except Exception as e:
+                st.error(f"OCR processing failed: {e}")
+
+# Export layout
 st.download_button(
     label="💾 Export Layout as JSON",
     data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
