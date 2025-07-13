@@ -48,6 +48,8 @@ uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg"
 background_image = None
 
 if uploaded_file:
+    # Read the file content once and store it
+    file_bytes = uploaded_file.read()
     image = Image.open(uploaded_file).convert("RGB")
     width, height = image.size
     background_image = np.array(image).astype(np.uint8)
@@ -64,7 +66,7 @@ if uploaded_file:
         "key": "canvas"
     }
     if background_image is not None:
-        canvas_kwargs["background_image"] = background_image
+        canvas_kwargs["background_image"] = Image.fromarray(background_image)
 
     canvas_result = st_canvas(**canvas_kwargs)
 
@@ -81,99 +83,103 @@ if uploaded_file:
         try:
             with st.spinner("🔍 Running OCR..."):
                 client = vision.ImageAnnotatorClient()
-                vision_img = vision.Image(content=uploaded_file.getvalue())
+                # Use the stored file bytes instead of reading the upload again
+                vision_img = vision.Image(content=file_bytes)
                 response = client.document_text_detection(image=vision_img)
                 annotations = response.text_annotations
 
-                detect_header_regions(annotations, field_labels, field_boxes, debug=True)
+                if annotations:  # Check if we got any annotations
+                    detect_header_regions(annotations, field_labels, field_boxes, debug=True)
 
-                draw_img = image.copy()
-                draw = ImageDraw.Draw(draw_img)
-                blocks = []
+                    draw_img = image.copy()
+                    draw = ImageDraw.Draw(draw_img)
+                    blocks = []
 
-                for ann in annotations[1:]:
-                    vertices = ann.bounding_poly.vertices
-                    xs = [int(v.x) for v in vertices if v.x is not None]
-                    ys = [int(v.y) for v in vertices if v.y is not None]
-                    x1, x2 = min(xs), max(xs)
-                    y1, y2 = min(ys), max(ys)
-                    center = (sum(xs) / len(xs), sum(ys) / len(ys))
-                    blocks.append({"text": ann.description, "center": center})
-                    draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=1)
-                    draw.text((x1, y1 - 10), ann.description, fill="blue")
+                    for ann in annotations[1:]:
+                        vertices = ann.bounding_poly.vertices
+                        xs = [int(v.x) for v in vertices if v.x is not None]
+                        ys = [int(v.y) for v in vertices if v.y is not None]
+                        if xs and ys:  # Check we have valid coordinates
+                            x1, x2 = min(xs), max(xs)
+                            y1, y2 = min(ys), max(ys)
+                            center = (sum(xs) / len(xs), sum(ys) / len(ys))
+                            blocks.append({"text": ann.description, "center": center})
+                            draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=1)
+                            draw.text((x1, y1 - 10), ann.description, fill="blue")
 
-                for label in field_labels:
-                    box = field_boxes.get(label)
-                    if box:
-                        x1, y1 = box["x1"], box["y1"]
-                        x2, y2 = box["x2"], box["y2"]
-                        draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=3)
-                        draw.text((x1, y1 - 12), label, fill="green")
+                    st.session_state.ocr_blocks = blocks
 
-                bounds = compute_form_bounds(field_boxes)
-                if bounds:
-                    x_min, y_min, x_max, y_max = bounds
-                    draw.rectangle([(x_min, y_min), (x_max, y_max)], outline="green", width=4)
-                    draw.text((x_min, y_min - 30), f"Φόρμα {form_num}", fill="green")
+                    for label in field_labels:
+                        box = field_boxes.get(label)
+                        if box:
+                            x1, y1 = box["x1"], box["y1"]
+                            x2, y2 = box["x2"], box["y2"]
+                            draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=3)
+                            draw.text((x1, y1 - 12), label, fill="green")
 
-                st.session_state.ocr_blocks = blocks
+                    bounds = compute_form_bounds(field_boxes)
+                    if bounds:
+                        x_min, y_min, x_max, y_max = bounds
+                        draw.rectangle([(x_min, y_min), (x_max, y_max)], outline="green", width=4)
+                        draw.text((x_min, y_min - 30), f"Φόρμα {form_num}", fill="green")
 
-            st.markdown("### 📌 Tagged Overlay Image")
-            overlay_base64 = image_to_base64(draw_img)
-            st.markdown(
-                f"""
-                <div style='border:1px solid #ccc; overflow-x:auto; padding:10px'>
-                    <img src='data:image/png;base64,{overlay_base64}' style='max-height:800px' />
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+                st.markdown("### 📌 Tagged Overlay Image")
+                overlay_base64 = image_to_base64(draw_img)
+                st.markdown(
+                    f"""
+                    <div style='border:1px solid #ccc; overflow-x:auto; padding:10px'>
+                        <img src='data:image/png;base64,{overlay_base64}' style='max-height:800px' />
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
-            st.subheader("🧠 Extracted Field Values")
-            for i in [1, 2, 3]:
-                st.markdown(f"### 📄 Φόρμα {i}")
-                layout = st.session_state.form_layouts[i]
-                for label in field_labels:
-                    box = layout.get(label)
-                    if box:
-                        xmin, xmax = sorted([box["x1"], box["x2"]])
-                        ymin, ymax = sorted([box["y1"], box["y2"]])
-                        matches = [
-                            b["text"] for b in st.session_state.ocr_blocks
-                            if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax
-                        ]
-                        val = " ".join(matches) if matches else "(no match)"
-                        st.text_input(label, val, key=f"{i}_{label}")
+                st.subheader("🧠 Extracted Field Values")
+                for i in [1, 2, 3]:
+                    st.markdown(f"### 📄 Φόρμα {i}")
+                    layout = st.session_state.form_layouts[i]
+                    for label in field_labels:
+                        box = layout.get(label)
+                        if box:
+                            xmin, xmax = sorted([box["x1"], box["x2"]])
+                            ymin, ymax = sorted([box["y1"], box["y2"]])
+                            matches = [
+                                b["text"] for b in st.session_state.ocr_blocks
+                                if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax
+                            ]
+                            val = " ".join(matches) if matches else "(no match)"
+                            st.text_input(label, val, key=f"{i}_{label}")
 
-            st.header("🪄 Auto-Extracted Fields")
-            if st.button("🪄 Auto-Extract from OCR"):
-                found = {}
-                normalized_labels = {normalize(lbl): lbl for lbl in field_labels}
-                for idx, block in enumerate(st.session_state.ocr_blocks):
-                    txt = normalize(block["text"])
-                    if txt in normalized_labels:
-                        ref_x, ref_y = block["center"]
-                        neighbor = None
-                        min_dist = float("inf")
-                        for other in st.session_state.ocr_blocks[idx+1:]:
-                            dx = other["center"][0] - ref_x
-                            dy = other["center"][1] - ref_y
-                            if dx >= 0 and dy >= 0:
-                                dist = (dx**2 + dy**2)**0.5
-                                if dist < min_dist:
-                                    min_dist = dist
-                                    neighbor = other
-                        if neighbor:
-                            label = normalized_labels[txt]
-                            found[label] = neighbor["text"]
-                st.session_state.auto_extracted_fields = found
+                st.header("🪄 Auto-Extracted Fields")
+                if st.button("🪄 Auto-Extract from OCR"):
+                    found = {}
+                    normalized_labels = {normalize(lbl): lbl for lbl in field_labels}
+                    for idx, block in enumerate(st.session_state.ocr_blocks):
+                        txt = normalize(block["text"])
+                        if txt in normalized_labels:
+                            ref_x, ref_y = block["center"]
+                            neighbor = None
+                            min_dist = float("inf")
+                            for other in st.session_state.ocr_blocks[idx+1:]:
+                                dx = other["center"][0] - ref_x
+                                dy = other["center"][1] - ref_y
+                                if dx >= 0 and dy >= 0:
+                                    dist = (dx**2 + dy**2)**0.5
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        neighbor = other
+                            if neighbor:
+                                label = normalized_labels[txt]
+                                found[label] = neighbor["text"]
+                    st.session_state.auto_extracted_fields = found
 
-            if st.session_state.auto_extracted_fields:
-                st.subheader("🧾 Predicted Field Mapping")
-                st.json(st.session_state.auto_extracted_fields)
+                if st.session_state.auto_extracted_fields:
+                    st.subheader("🧾 Predicted Field Mapping")
+                    st.json(st.session_state.auto_extracted_fields)
 
         except Exception as e:
             st.error(f"OCR processing failed: {e}")
+            st.exception(e)  # This will show the full traceback
 
     st.download_button(
         label="💾 Export Layout as JSON",
