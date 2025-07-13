@@ -60,7 +60,7 @@ if uploaded_file:
     field_boxes = st.session_state.form_layouts[form_num]
 
     st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
-    coords = streamlit_image_coordinates(image, key="coord_click", height=min(800, image.height))
+    coords = streamlit_image_coordinates(image, key="coord_click"))
 
     if coords and 0 <= coords["x"] < image.width and 0 <= coords["y"] < image.height:
         x, y = coords["x"], coords["y"]
