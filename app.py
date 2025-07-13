@@ -18,14 +18,14 @@ def image_to_base64(img):
     return base64.b64encode(buffer.getvalue()).decode()
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek OCR Annotator — Field Tagging & OCR Overlay")
+st.title("🇬🇷 Greek OCR Annotator — True Size Tagging + OCR")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# Session state
+# Session state init
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -35,11 +35,11 @@ if "ocr_blocks" not in st.session_state:
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
 
-# Sidebar
+# Sidebar controls
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-cred_file = st.sidebar.file_uploader("🔐 Upload Google credentials", type=["json"])
+cred_file = st.sidebar.file_uploader("🔐 Google credentials (JSON)", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f:
         f.write(cred_file.read())
@@ -57,23 +57,25 @@ if layout_file:
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
+    image_width, image_height = image.size
     field_boxes = st.session_state.form_layouts[form_num]
 
     st.markdown("### 🖱️ Tagging Image (Click top-left then bottom-right)")
     coords = streamlit_image_coordinates(image, key="coord_click")
 
-    if coords and 0 <= coords["x"] < image.width and 0 <= coords["y"] < image.height:
+    if coords:
         x, y = coords["x"], coords["y"]
-        if st.session_state.click_stage == "start":
-            field_boxes[field_label] = {"x1": x, "y1": y}
-            st.session_state.click_stage = "end"
-            st.info(f"🟩 Top-left set for '{field_label}'. Click bottom-right.")
+        if 0 <= x < image_width and 0 <= y < image_height:
+            if st.session_state.click_stage == "start":
+                field_boxes[field_label] = {"x1": x, "y1": y}
+                st.session_state.click_stage = "end"
+                st.info(f"🟩 Top-left set for '{field_label}'. Click bottom-right.")
+            else:
+                field_boxes[field_label].update({"x2": x, "y2": y})
+                st.session_state.click_stage = "start"
+                st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
         else:
-            field_boxes[field_label].update({"x2": x, "y2": y})
-            st.session_state.click_stage = "start"
-            st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
-    elif coords:
-        st.warning("⚠️ Click outside image bounds")
+            st.warning("⚠️ Click was outside the image bounds. Please try again.")
 
     if cred_file:
         try:
