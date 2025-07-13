@@ -2,6 +2,7 @@ import streamlit as st
 from PIL import Image, ImageDraw
 import json
 import os
+import numpy as np
 from google.cloud import vision
 from streamlit_drawable_canvas import st_canvas
 
@@ -45,6 +46,7 @@ if layout_file:
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
+    np_image = np.array(image)
     width, height = image.size
     field_boxes = st.session_state.form_layouts[form_num]
 
@@ -53,7 +55,7 @@ if uploaded_file:
         fill_color="rgba(0, 255, 0, 0.3)",
         stroke_width=2,
         stroke_color="green",
-        background_image=image,
+        background_image=np_image,
         height=height,
         width=width,
         drawing_mode="rect",
