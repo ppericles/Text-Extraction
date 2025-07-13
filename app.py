@@ -2,7 +2,7 @@ import streamlit as st
 from PIL import Image, ImageDraw
 import json
 import os
-import base64
+import numpy as np
 from io import BytesIO
 from google.cloud import vision
 from streamlit_drawable_canvas import st_canvas
@@ -10,12 +10,6 @@ from streamlit_drawable_canvas import st_canvas
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
 from utils.image_utils import image_to_base64
 from utils.layout_utils import get_form_bounding_box
-
-def pil_to_data_url(img):
-    buffer = BytesIO()
-    img.save(buffer, format="PNG")
-    b64 = base64.b64encode(buffer.getvalue()).decode()
-    return f"data:image/png;base64,{b64}"
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
 st.title("🇬🇷 Greek OCR Annotator — Drag-to-Tag Edition")
@@ -54,16 +48,15 @@ uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg"
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     width, height = image.size
+    np_image = np.array(image).astype(np.uint8)
     field_boxes = st.session_state.form_layouts[form_num]
 
     st.markdown("### 🖱️ Drag to Tag Field Regions")
-    bg_url = pil_to_data_url(image)
-
     canvas_result = st_canvas(
         fill_color="rgba(0, 255, 0, 0.3)",
         stroke_width=2,
         stroke_color="green",
-        background_image=bg_url,
+        background_image=np_image,
         height=height,
         width=width,
         drawing_mode="rect",
@@ -106,7 +99,7 @@ if uploaded_file:
 
                 for label in field_labels:
                     box = field_boxes.get(label)
-                    if box:
+                    if box and all(k in box for k in ("x1", "y1", "x2", "y2")):
                         x1, y1 = box["x1"], box["y1"]
                         x2, y2 = box["x2"], box["y2"]
                         draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=3)
@@ -137,7 +130,7 @@ if uploaded_file:
                 layout = st.session_state.form_layouts[i]
                 for label in field_labels:
                     box = layout.get(label)
-                    if box:
+                    if box and all(k in box for k in ("x1", "y1", "x2", "y2")):
                         xmin, xmax = sorted([box["x1"], box["x2"]])
                         ymin, ymax = sorted([box["y1"], box["y2"]])
                         matches = [
