@@ -2,8 +2,6 @@ import streamlit as st
 from PIL import Image, ImageDraw
 import json
 import os
-import numpy as np
-from io import BytesIO
 from google.cloud import vision
 from streamlit_drawable_canvas import st_canvas
 
@@ -48,7 +46,6 @@ uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg"
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     width, height = image.size
-    np_image = np.array(image).astype(np.uint8)
     field_boxes = st.session_state.form_layouts[form_num]
 
     st.markdown("### 🖱️ Drag to Tag Field Regions")
@@ -56,7 +53,7 @@ if uploaded_file:
         fill_color="rgba(0, 255, 0, 0.3)",
         stroke_width=2,
         stroke_color="green",
-        background_image=np_image,
+        background_image=image,  # ✅ PIL image avoids ValueError
         height=height,
         width=width,
         drawing_mode="rect",
@@ -99,7 +96,7 @@ if uploaded_file:
 
                 for label in field_labels:
                     box = field_boxes.get(label)
-                    if box and all(k in box for k in ("x1", "y1", "x2", "y2")):
+                    if box:
                         x1, y1 = box["x1"], box["y1"]
                         x2, y2 = box["x2"], box["y2"]
                         draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=3)
@@ -130,7 +127,7 @@ if uploaded_file:
                 layout = st.session_state.form_layouts[i]
                 for label in field_labels:
                     box = layout.get(label)
-                    if box and all(k in box for k in ("x1", "y1", "x2", "y2")):
+                    if box:
                         xmin, xmax = sorted([box["x1"], box["x2"]])
                         ymin, ymax = sorted([box["y1"], box["y2"]])
                         matches = [
