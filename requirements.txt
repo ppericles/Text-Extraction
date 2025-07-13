@@ -1,5 +1,5 @@
 streamlit
-streamlit-image-coordinates
-Pillow
+streamlit-drawable-canvas
 numpy
+pillow
 google-cloud-vision
