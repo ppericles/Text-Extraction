@@ -2,16 +2,14 @@ import streamlit as st
 from PIL import Image, ImageDraw
 import json
 import os
-import numpy as np
 from google.cloud import vision
-from streamlit_drawable_canvas import st_canvas
 
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
 from utils.image_utils import image_to_base64
 from utils.layout_utils import get_form_bounding_box
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek OCR Annotator — Single-Click Tagging")
+st.title("🇬🇷 Greek OCR Annotator — Coordinate Tagging Edition")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
@@ -24,11 +22,9 @@ if "ocr_blocks" not in st.session_state:
     st.session_state.ocr_blocks = []
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
-if "click_points" not in st.session_state:
-    st.session_state.click_points = []
 
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
-selected_label = st.sidebar.selectbox("📝 Select Field Label", field_labels)
+selected_label = st.sidebar.selectbox("📝 Field Label", field_labels)
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
 if cred_file:
@@ -49,37 +45,21 @@ uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg"
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     width, height = image.size
-    np_image = np.array(image).astype(np.uint8)
     field_boxes = st.session_state.form_layouts[form_num]
 
-    st.markdown("### 👆 Click Two Points to Define Box")
+    st.markdown("### 🖱️ Manually Enter Coordinates")
 
-    canvas_result = st_canvas(
-        fill_color="rgba(0, 255, 0, 0.5)",
-        stroke_width=1,
-        stroke_color="blue",
-        background_image=np_image,
-        update_streamlit=True,
-        height=height,
-        width=width,
-        drawing_mode="circle",
-        key="click_canvas"
-    )
+    x1 = st.number_input("Top-left X", min_value=0, max_value=width, value=0)
+    y1 = st.number_input("Top-left Y", min_value=0, max_value=height, value=0)
+    x2 = st.number_input("Bottom-right X", min_value=0, max_value=width, value=0)
+    y2 = st.number_input("Bottom-right Y", min_value=0, max_value=height, value=0)
 
-    if canvas_result.json_data and canvas_result.json_data["objects"]:
-        circles = canvas_result.json_data["objects"]
-        new_points = [(int(obj["left"]), int(obj["top"])) for obj in circles]
-        for pt in new_points:
-            st.session_state.click_points.append(pt)
-
-        if len(st.session_state.click_points) >= 2:
-            (x1, y1), (x2, y2) = st.session_state.click_points[:2]
-            st.session_state.click_points = st.session_state.click_points[2:]
-            field_boxes[selected_label] = {
-                "x1": min(x1, x2), "y1": min(y1, y2),
-                "x2": max(x1, x2), "y2": max(y1, y2)
-            }
-            st.success(f"✅ Box saved for '{selected_label}' in Φόρμα {form_num}")
+    if st.button("📌 Save Bounding Box"):
+        field_boxes[selected_label] = {
+            "x1": int(x1), "y1": int(y1),
+            "x2": int(x2), "y2": int(y2)
+        }
+        st.success(f"Box saved for '{selected_label}' in Φόρμα {form_num}")
 
     if cred_file and st.button("🔍 Run OCR"):
         try:
@@ -99,12 +79,12 @@ if uploaded_file:
                     vertices = ann.bounding_poly.vertices
                     xs = [int(v.x) for v in vertices if v.x is not None]
                     ys = [int(v.y) for v in vertices if v.y is not None]
-                    x1, x2 = min(xs), max(xs)
-                    y1, y2 = min(ys), max(ys)
+                    x1a, x2a = min(xs), max(xs)
+                    y1a, y2a = min(ys), max(ys)
                     center = (sum(xs) / len(xs), sum(ys) / len(ys))
                     blocks.append({"text": ann.description, "center": center})
-                    draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=1)
-                    draw.text((x1, y1 - 10), ann.description, fill="blue")
+                    draw.rectangle([(x1a, y1a), (x2a, y2a)], outline="red", width=1)
+                    draw.text((x1a, y1a - 10), ann.description, fill="blue")
 
                 for label in field_labels:
                     box = field_boxes.get(label)
@@ -115,15 +95,10 @@ if uploaded_file:
                         )
                         draw.text((box["x1"], box["y1"] - 12), label, fill="green")
 
-                bounds = compute_form_bounds(field_boxes)
-                if bounds:
-                    x_min, y_min, x_max, y_max = bounds
-                    draw.rectangle([(x_min, y_min), (x_max, y_max)], outline="green", width=4)
-                    draw.text((x_min, y_min - 30), f"Φόρμα {form_num}", fill="green")
-
                 st.session_state.ocr_blocks = blocks
 
             st.markdown("### 🖼️ OCR Overlay Image")
+            from utils.image_utils import image_to_base64
             overlay_base64 = image_to_base64(draw_img)
             st.markdown(
                 f"""<div style='overflow-x:auto'><img src='data:image/png;base64,{overlay_base64}' /></div>""",
