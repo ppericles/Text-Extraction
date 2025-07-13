@@ -5,26 +5,52 @@ import streamlit as st
 def normalize(text):
     return unidecode(text.upper().strip())
 
+def group_lines(annotations, y_thresh=15):
+    lines = []
+    for ann in annotations[1:]:  # Skip full text block
+        text = ann.description
+        vertices = ann.bounding_poly.vertices
+        ys = [v.y for v in vertices if v.y is not None]
+        x_center = sum(v.x for v in vertices if v.x is not None) / len(vertices)
+        y_center = sum(ys) / len(ys) if ys else 0
+
+        placed = False
+        for line in lines:
+            avg_y = line["avg_y"]
+            if abs(y_center - avg_y) < y_thresh:
+                line["words"].append((x_center, text, vertices))
+                line["avg_y"] = (line["avg_y"] * len(line["words"]) + y_center) / (len(line["words"]) + 1)
+                placed = True
+                break
+
+        if not placed:
+            lines.append({"avg_y": y_center, "words": [(x_center, text, vertices)]})
+    return lines
+
 def detect_header_regions(annotations, field_labels, layout_dict, debug=False):
     normalized_targets = [normalize(lbl) for lbl in field_labels]
     hits = []
-    match_log = []  # For displaying in Streamlit
+    match_log = []
 
-    for ann in annotations[1:]:
-        txt_raw = ann.description
-        txt = normalize(txt_raw)
-        match = get_close_matches(txt, normalized_targets, n=1, cutoff=0.8)
+    lines = group_lines(annotations)
+    for line in lines:
+        words = sorted(line["words"], key=lambda w: w[0])  # Sort by x
+        full_text = " ".join(word[1] for word in words)
+        normalized_line = normalize(full_text)
+        match = get_close_matches(normalized_line, normalized_targets, n=1, cutoff=0.85)
         if match:
             label = field_labels[normalized_targets.index(match[0])]
-            match_log.append(f"✔️ '{txt_raw}' → '{label}'")
+            match_log.append(f"✔️ '{full_text}' → '{label}'")
 
-            vertices = ann.bounding_poly.vertices
-            xs = [int(v.x) for v in vertices if v.x is not None]
-            ys = [int(v.y) for v in vertices if v.y is not None]
-
-            if len(xs) == 4 and len(ys) == 4:
-                x1, x2 = min(xs), max(xs)
-                y1, y2 = min(ys), max(ys)
+            # Aggregate all bounding box vertices
+            all_x = []
+            all_y = []
+            for _, _, vertices in words:
+                all_x.extend([v.x for v in vertices if v.x is not None])
+                all_y.extend([v.y for v in vertices if v.y is not None])
+            if all_x and all_y:
+                x1, x2 = min(all_x), max(all_x)
+                y1, y2 = min(all_y), max(all_y)
                 value_height = int((y2 - y1) * 1.5)
                 layout_dict[label] = {
                     "x1": x1, "y1": y1,
@@ -32,7 +58,7 @@ def detect_header_regions(annotations, field_labels, layout_dict, debug=False):
                 }
                 hits.append(label)
             else:
-                match_log.append(f"⚠️ Bounding box incomplete for '{label}'")
+                match_log.append(f"⚠️ Incomplete bounding box for '{label}'")
 
     missing = [lbl for lbl in field_labels if lbl not in hits]
     if missing:
@@ -41,7 +67,7 @@ def detect_header_regions(annotations, field_labels, layout_dict, debug=False):
     if debug and match_log:
         st.subheader("🧪 Header Detection Log")
         st.code("\n".join(match_log))
-        
+
 def compute_form_bounds(form_layout):
     coords = []
     for box in form_layout.values():
