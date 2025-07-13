@@ -3,3 +3,4 @@ streamlit-drawable-canvas
 numpy
 pillow
 google-cloud-vision
+unidecode
