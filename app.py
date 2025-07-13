@@ -171,7 +171,7 @@ if uploaded_file:
                             min_dist = float("inf")
                             for other in st.session_state.ocr_blocks[idx+1:]:
                                 dx = other["center"][0] - ref_x
-                                                                dy = other["center"][1] - ref_y
+                                dy = other["center"][1] - ref_y
                                 if dx >= 0 and dy >= 0:
                                     dist = np.sqrt(dx**2 + dy**2)
                                     if dist < min_dist:
