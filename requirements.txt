@@ -4,3 +4,4 @@ Pillow
 numpy
 streamlit-image-coordinates
 unidecode
+streamlit-drawable-canvas
