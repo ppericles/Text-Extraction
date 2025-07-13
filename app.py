@@ -3,27 +3,29 @@ from PIL import Image, ImageDraw
 import json
 import os
 from google.cloud import vision
+from streamlit_image_coordinates import image_coordinates
 
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
 from utils.image_utils import image_to_base64
 from utils.layout_utils import get_form_bounding_box
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek OCR Annotator — Point & Click Edition")
+st.title("🇬🇷 Greek OCR Annotator — Click-to-Tag Edition")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
+# Init session state
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "ocr_blocks" not in st.session_state:
     st.session_state.ocr_blocks = []
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
-if "click_state" not in st.session_state:
-    st.session_state.click_state = {}
+if "click_points" not in st.session_state:
+    st.session_state.click_points = []
 
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 selected_label = st.sidebar.selectbox("📝 Select Field Label", field_labels)
@@ -49,18 +51,34 @@ if uploaded_file:
     width, height = image.size
     field_boxes = st.session_state.form_layouts[form_num]
 
-    st.markdown("### 👆 Click Two Points to Tag a Field")
-    click_info = st.image(image, use_container_width=False)
+    draw_img = image.copy()
+    draw = ImageDraw.Draw(draw_img)
 
-    # Simulated clicks via coordinates
-    x1 = st.number_input("🔹 Click 1 — X", min_value=0, max_value=width, value=0)
-    y1 = st.number_input("🔹 Click 1 — Y", min_value=0, max_value=height, value=0)
-    x2 = st.number_input("🔸 Click 2 — X", min_value=0, max_value=width, value=0)
-    y2 = st.number_input("🔸 Click 2 — Y", min_value=0, max_value=height, value=0)
+    # Draw existing saved boxes
+    for label in field_labels:
+        box = field_boxes.get(label)
+        if box:
+            draw.rectangle(
+                [(box["x1"], box["y1"]), (box["x2"], box["y2"])],
+                outline="green", width=3
+            )
+            draw.text((box["x1"], box["y1"] - 12), label, fill="green")
 
-    if st.button("📌 Save Field Box"):
-        field_boxes[selected_label] = {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)}
-        st.success(f"✅ Box saved for '{selected_label}' in Φόρμα {form_num}")
+    # Show clickable image
+    st.markdown("### 👆 Click two points to tag box")
+    coord = image_coordinates(draw_img)
+
+    if coord is not None:
+        st.session_state.click_points.append((coord["x"], coord["y"]))
+        st.toast(f"Point {len(st.session_state.click_points)} captured: ({coord['x']}, {coord['y']})")
+        if len(st.session_state.click_points) == 2:
+            (x1, y1), (x2, y2) = st.session_state.click_points
+            field_boxes[selected_label] = {
+                "x1": min(x1, x2), "y1": min(y1, y2),
+                "x2": max(x1, x2), "y2": max(y1, y2)
+            }
+            st.session_state.click_points = []
+            st.success(f"✅ Box saved for '{selected_label}' in Φόρμα {form_num}")
 
     if cred_file and st.button("🔍 Run OCR"):
         try:
@@ -72,8 +90,8 @@ if uploaded_file:
 
                 detect_header_regions(annotations, field_labels, field_boxes, debug=True)
 
-                draw_img = image.copy()
-                draw = ImageDraw.Draw(draw_img)
+                draw_img_ocr = image.copy()
+                draw_ocr = ImageDraw.Draw(draw_img_ocr)
                 blocks = []
 
                 for ann in annotations[1:]:
@@ -84,27 +102,28 @@ if uploaded_file:
                     y1, y2 = min(ys), max(ys)
                     center = (sum(xs) / len(xs), sum(ys) / len(ys))
                     blocks.append({"text": ann.description, "center": center})
-                    draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=1)
-                    draw.text((x1, y1 - 10), ann.description, fill="blue")
+                    draw_ocr.rectangle([(x1, y1), (x2, y2)], outline="red", width=1)
+                    draw_ocr.text((x1, y1 - 10), ann.description, fill="blue")
 
                 for label in field_labels:
                     box = field_boxes.get(label)
                     if box:
-                        x1, y1 = box["x1"], box["y1"]
-                        x2, y2 = box["x2"], box["y2"]
-                        draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=3)
-                        draw.text((x1, y1 - 12), label, fill="green")
+                        draw_ocr.rectangle(
+                            [(box["x1"], box["y1"]), (box["x2"], box["y2"])],
+                            outline="green", width=3
+                        )
+                        draw_ocr.text((box["x1"], box["y1"] - 12), label, fill="green")
 
                 bounds = compute_form_bounds(field_boxes)
                 if bounds:
                     x_min, y_min, x_max, y_max = bounds
-                    draw.rectangle([(x_min, y_min), (x_max, y_max)], outline="green", width=4)
-                    draw.text((x_min, y_min - 30), f"Φόρμα {form_num}", fill="green")
+                    draw_ocr.rectangle([(x_min, y_min), (x_max, y_max)], outline="green", width=4)
+                    draw_ocr.text((x_min, y_min - 30), f"Φόρμα {form_num}", fill="green")
 
                 st.session_state.ocr_blocks = blocks
 
-            st.markdown("### 📌 Tagged Overlay")
-            overlay_base64 = image_to_base64(draw_img)
+            st.markdown("### 🖼️ OCR Overlay")
+            overlay_base64 = image_to_base64(draw_img_ocr)
             st.markdown(
                 f"""<div style='overflow-x:auto'><img src='data:image/png;base64,{overlay_base64}' /></div>""",
                 unsafe_allow_html=True
