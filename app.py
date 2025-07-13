@@ -71,7 +71,7 @@ if uploaded_file:
                 response = client.document_text_detection(image=vision_img)
                 annotations = response.text_annotations
 
-                detect_header_regions(annotations, field_labels, field_boxes)
+                detect_header_regions(annotations, field_labels, field_boxes, debug=True)
 
                 draw_img = image.copy()
                 draw = ImageDraw.Draw(draw_img)
