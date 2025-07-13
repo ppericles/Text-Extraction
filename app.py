@@ -1,31 +1,23 @@
 import streamlit as st
 from PIL import Image, ImageDraw
-import numpy as np
 import json
 import os
-import base64
-from io import BytesIO
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
-from unidecode import unidecode
 
-def normalize(text):
-    return unidecode(text.upper().strip())
-
-def image_to_base64(img):
-    buffer = BytesIO()
-    img.save(buffer, format="PNG")
-    return base64.b64encode(buffer.getvalue()).decode()
+from utils.ocr_utils import normalize, detect_header_regions
+from utils.image_utils import image_to_base64
+from utils.layout_utils import get_form_bounding_box
+from utils.tagging_utils import handle_click
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek OCR Annotator — True Size Tagging + OCR Overlay")
+st.title("🇬🇷 Greek OCR Annotator — Auto Header Detection + OCR Overlay")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# Session state
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "click_stage" not in st.session_state:
@@ -35,11 +27,10 @@ if "ocr_blocks" not in st.session_state:
 if "auto_extracted_fields" not in st.session_state:
     st.session_state.auto_extracted_fields = {}
 
-# Sidebar
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 field_label = st.sidebar.selectbox("📝 Field Name", field_labels)
 
-cred_file = st.sidebar.file_uploader("🔐 Upload Google credentials", type=["json"])
+cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f:
         f.write(cred_file.read())
@@ -64,20 +55,13 @@ if uploaded_file:
     coords = streamlit_image_coordinates(image, key="coord_click", height=height)
 
     if coords:
-        x, y = coords["x"], coords["y"]
-        if 0 <= x < width and 0 <= y < height:
-            if st.session_state.click_stage == "start":
-                field_boxes[field_label] = {"x1": x, "y1": y}
-                st.session_state.click_stage = "end"
-                st.info(f"🟩 Top-left set for '{field_label}'. Click bottom-right.")
-            else:
-                if field_label not in field_boxes:
-                    field_boxes[field_label] = {}
-                field_boxes[field_label].update({"x2": x, "y2": y})
-                st.session_state.click_stage = "start"
-                st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
+        result = handle_click(coords, width, height, field_label, field_boxes, st.session_state)
+        if result == "outside":
+            st.warning("⚠️ Click was outside image bounds. Try again.")
+        elif result == "start":
+            st.info(f"🟩 Top-left set for '{field_label}'. Click bottom-right.")
         else:
-            st.warning("⚠️ Click was outside the image bounds. Try again.")
+            st.success(f"✅ Box saved for '{field_label}' in Φόρμα {form_num}.")
 
     if cred_file:
         try:
@@ -87,14 +71,16 @@ if uploaded_file:
                 response = client.document_text_detection(image=vision_img)
                 annotations = response.text_annotations
 
+                detect_header_regions(annotations, field_labels, field_boxes)
+
                 draw_img = image.copy()
                 draw = ImageDraw.Draw(draw_img)
                 blocks = []
 
                 for ann in annotations[1:]:
                     vertices = ann.bounding_poly.vertices
-                    xs = [int(v.x) for v in vertices]
-                    ys = [int(v.y) for v in vertices]
+                    xs = [int(v.x) for v in vertices if v.x is not None]
+                    ys = [int(v.y) for v in vertices if v.y is not None]
                     x1, x2 = min(xs), max(xs)
                     y1, y2 = min(ys), max(ys)
                     center = (np.mean(xs), np.mean(ys))
@@ -109,6 +95,14 @@ if uploaded_file:
                         x2, y2 = box["x2"], box["y2"]
                         draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=2)
                         draw.text((x1, y1 - 10), label, fill="green")
+
+                for i in [1, 2, 3]:
+                    form_boxes = st.session_state.form_layouts[i]
+                    bounds = get_form_bounding_box(form_boxes)
+                    if bounds:
+                        x_min, y_min, x_max, y_max = bounds
+                        draw.rectangle([(x_min, y_min), (x_max, y_max)], outline="green", width=3)
+                        draw.text((x_min, y_min - 30), f"Φόρμα {i}", fill="green")
 
                 st.session_state.ocr_blocks = blocks
 
@@ -169,10 +163,9 @@ if uploaded_file:
         except Exception as e:
             st.error(f"OCR processing failed: {e}")
 
-# Export layout
-st.download_button(
-    label="💾 Export Layout as JSON",
-    data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
-    file_name="form_layouts.json",
-    mime="application/json"
-)
+    st.download_button(
+        label="💾 Export Layout as JSON",
+        data=json.dumps(st.session_state.form_layouts, ensure_ascii=False, indent=2),
+        file_name="form_layouts.json",
+        mime="application/json"
+    )
