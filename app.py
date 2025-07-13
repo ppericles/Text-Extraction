@@ -4,13 +4,13 @@ import json
 import os
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
-
+from difflib import get_close_matches
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
 from utils.image_utils import image_to_base64
 from utils.layout_utils import get_form_bounding_box
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek OCR Annotator — Click-to-Tag Edition")
+st.title("🇬🇷 Greek OCR Annotator — Enhanced UX Edition")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
@@ -28,7 +28,6 @@ if "click_points" not in st.session_state:
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
 selected_label = st.sidebar.selectbox("📝 Field Label", field_labels)
 
-# Credentials
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f:
@@ -36,7 +35,6 @@ if cred_file:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
-# Layout import
 layout_file = st.sidebar.file_uploader("📂 Import layout (.json)", type=["json"])
 if layout_file:
     try:
@@ -45,25 +43,36 @@ if layout_file:
     except Exception as e:
         st.sidebar.error(f"Import failed: {e}")
 
-# Image upload and tagging
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     field_boxes = st.session_state.form_layouts[form_num]
 
-    st.markdown("### 👆 Click twice to define box")
+    st.markdown("### 👆 Click Twice to Define a Field Box")
     coord = streamlit_image_coordinates(image)
-
     if coord:
         st.session_state.click_points.append((coord["x"], coord["y"]))
+        st.toast(f"Point {len(st.session_state.click_points)}: ({coord['x']}, {coord['y']})")
         if len(st.session_state.click_points) == 2:
             (x1, y1), (x2, y2) = st.session_state.click_points
             st.session_state.click_points = []
-            field_boxes[selected_label] = {
+
+            # Auto-label suggestion (mocked from OCR headers)
+            suggested_label = None
+            nearby_texts = []
+            for b in st.session_state.ocr_blocks:
+                cx, cy = b["center"]
+                if min(x1, x2) <= cx <= max(x1, x2) and min(y1, y2) <= cy <= max(y1, y2):
+                    nearby_texts.append(b["text"])
+            header_str = " ".join(nearby_texts).upper()
+            matches = get_close_matches(header_str, field_labels, n=1)
+            suggested_label = matches[0] if matches else selected_label
+
+            field_boxes[suggested_label] = {
                 "x1": min(x1, x2), "y1": min(y1, y2),
                 "x2": max(x1, x2), "y2": max(y1, y2)
             }
-            st.success(f"✅ Saved box for '{selected_label}' in Φόρμα {form_num}")
+            st.success(f"✅ Saved box for '{suggested_label}' in Φόρμα {form_num}")
 
     if cred_file and st.button("🔍 Run OCR"):
         try:
@@ -88,7 +97,6 @@ if uploaded_file:
                     draw.rectangle([(x1a, y1a), (x2a, y2a)], outline="red", width=1)
                     draw.text((x1a, y1a - 10), ann.description, fill="blue")
 
-                # Draw saved boxes
                 for label in field_labels:
                     box = field_boxes.get(label)
                     if box:
@@ -100,7 +108,7 @@ if uploaded_file:
 
                 st.session_state.ocr_blocks = blocks
 
-            st.markdown("### 🖼️ OCR Overlay")
+            st.markdown("### 🖼️ OCR + Tag Overlay")
             overlay_base64 = image_to_base64(draw_img)
             st.markdown(
                 f"""<div style='overflow-x:auto'><img src='data:image/png;base64,{overlay_base64}' /></div>""",
@@ -110,18 +118,19 @@ if uploaded_file:
         except Exception as e:
             st.error(f"OCR failed: {e}")
 
-    st.subheader("🧠 Extracted Field Values")
-    for label in field_labels:
-        box = field_boxes.get(label)
-        if box:
-            xmin, xmax = sorted([box["x1"], box["x2"]])
-            ymin, ymax = sorted([box["y1"], box["y2"]])
-            matches = [
-                b["text"] for b in st.session_state.ocr_blocks
-                if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax
-            ]
-            val = " ".join(matches) if matches else "(no match)"
-            st.text_input(label, val, key=f"{form_num}_{label}")
+    st.subheader(f"🧠 Extracted Field Values for Φόρμα {form_num}")
+    with st.expander(f"Φόρμα {form_num} Fields", expanded=True):
+        for label in field_labels:
+            box = field_boxes.get(label)
+            if box:
+                xmin, xmax = sorted([box["x1"], box["x2"]])
+                ymin, ymax = sorted([box["y1"], box["y2"]])
+                matches = [
+                    b["text"] for b in st.session_state.ocr_blocks
+                    if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax
+                ]
+                val = " ".join(matches) if matches else "(no match)"
+                st.text_input(label, val, key=f"{form_num}_{label}")
 
     st.download_button(
         label="💾 Export Layout as JSON",
