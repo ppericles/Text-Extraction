@@ -2,22 +2,22 @@ import streamlit as st
 from PIL import Image, ImageDraw
 import json
 import os
+import numpy as np
 from google.cloud import vision
-from streamlit_image_coordinates import image_coordinates
+from streamlit_drawable_canvas import st_canvas
 
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
 from utils.image_utils import image_to_base64
 from utils.layout_utils import get_form_bounding_box
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
-st.title("🇬🇷 Greek OCR Annotator — Click-to-Tag Edition")
+st.title("🇬🇷 Greek OCR Annotator — Single-Click Tagging")
 
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# Init session state
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
 if "ocr_blocks" not in st.session_state:
@@ -49,35 +49,36 @@ uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg"
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     width, height = image.size
+    np_image = np.array(image).astype(np.uint8)
     field_boxes = st.session_state.form_layouts[form_num]
 
-    draw_img = image.copy()
-    draw = ImageDraw.Draw(draw_img)
+    st.markdown("### 👆 Click Two Points to Define Box")
 
-    # Draw existing saved boxes
-    for label in field_labels:
-        box = field_boxes.get(label)
-        if box:
-            draw.rectangle(
-                [(box["x1"], box["y1"]), (box["x2"], box["y2"])],
-                outline="green", width=3
-            )
-            draw.text((box["x1"], box["y1"] - 12), label, fill="green")
+    canvas_result = st_canvas(
+        fill_color="rgba(0, 255, 0, 0.5)",
+        stroke_width=1,
+        stroke_color="blue",
+        background_image=np_image,
+        update_streamlit=True,
+        height=height,
+        width=width,
+        drawing_mode="circle",
+        key="click_canvas"
+    )
 
-    # Show clickable image
-    st.markdown("### 👆 Click two points to tag box")
-    coord = image_coordinates(draw_img)
+    if canvas_result.json_data and canvas_result.json_data["objects"]:
+        circles = canvas_result.json_data["objects"]
+        new_points = [(int(obj["left"]), int(obj["top"])) for obj in circles]
+        for pt in new_points:
+            st.session_state.click_points.append(pt)
 
-    if coord is not None:
-        st.session_state.click_points.append((coord["x"], coord["y"]))
-        st.toast(f"Point {len(st.session_state.click_points)} captured: ({coord['x']}, {coord['y']})")
-        if len(st.session_state.click_points) == 2:
-            (x1, y1), (x2, y2) = st.session_state.click_points
+        if len(st.session_state.click_points) >= 2:
+            (x1, y1), (x2, y2) = st.session_state.click_points[:2]
+            st.session_state.click_points = st.session_state.click_points[2:]
             field_boxes[selected_label] = {
                 "x1": min(x1, x2), "y1": min(y1, y2),
                 "x2": max(x1, x2), "y2": max(y1, y2)
             }
-            st.session_state.click_points = []
             st.success(f"✅ Box saved for '{selected_label}' in Φόρμα {form_num}")
 
     if cred_file and st.button("🔍 Run OCR"):
@@ -90,8 +91,8 @@ if uploaded_file:
 
                 detect_header_regions(annotations, field_labels, field_boxes, debug=True)
 
-                draw_img_ocr = image.copy()
-                draw_ocr = ImageDraw.Draw(draw_img_ocr)
+                draw_img = image.copy()
+                draw = ImageDraw.Draw(draw_img)
                 blocks = []
 
                 for ann in annotations[1:]:
@@ -102,28 +103,28 @@ if uploaded_file:
                     y1, y2 = min(ys), max(ys)
                     center = (sum(xs) / len(xs), sum(ys) / len(ys))
                     blocks.append({"text": ann.description, "center": center})
-                    draw_ocr.rectangle([(x1, y1), (x2, y2)], outline="red", width=1)
-                    draw_ocr.text((x1, y1 - 10), ann.description, fill="blue")
+                    draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=1)
+                    draw.text((x1, y1 - 10), ann.description, fill="blue")
 
                 for label in field_labels:
                     box = field_boxes.get(label)
                     if box:
-                        draw_ocr.rectangle(
+                        draw.rectangle(
                             [(box["x1"], box["y1"]), (box["x2"], box["y2"])],
                             outline="green", width=3
                         )
-                        draw_ocr.text((box["x1"], box["y1"] - 12), label, fill="green")
+                        draw.text((box["x1"], box["y1"] - 12), label, fill="green")
 
                 bounds = compute_form_bounds(field_boxes)
                 if bounds:
                     x_min, y_min, x_max, y_max = bounds
-                    draw_ocr.rectangle([(x_min, y_min), (x_max, y_max)], outline="green", width=4)
-                    draw_ocr.text((x_min, y_min - 30), f"Φόρμα {form_num}", fill="green")
+                    draw.rectangle([(x_min, y_min), (x_max, y_max)], outline="green", width=4)
+                    draw.text((x_min, y_min - 30), f"Φόρμα {form_num}", fill="green")
 
                 st.session_state.ocr_blocks = blocks
 
-            st.markdown("### 🖼️ OCR Overlay")
-            overlay_base64 = image_to_base64(draw_img_ocr)
+            st.markdown("### 🖼️ OCR Overlay Image")
+            overlay_base64 = image_to_base64(draw_img)
             st.markdown(
                 f"""<div style='overflow-x:auto'><img src='data:image/png;base64,{overlay_base64}' /></div>""",
                 unsafe_allow_html=True
