@@ -46,8 +46,8 @@ if layout_file:
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    np_image = np.array(image)
     width, height = image.size
+    np_image = np.array(image).astype(np.uint8)
     field_boxes = st.session_state.form_layouts[form_num]
 
     st.markdown("### 🖱️ Drag to Tag Field Regions")
