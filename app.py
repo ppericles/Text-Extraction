@@ -5,28 +5,48 @@ import os
 import numpy as np
 from google.cloud import vision
 from streamlit_drawable_canvas import st_canvas
+from io import BytesIO
 
-from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
-from utils.image_utils import image_to_base64
-from utils.layout_utils import get_form_bounding_box
+# Mock utils if not available (remove these if you have the actual utils)
+def normalize(text):
+    return text.upper().strip()
 
-# Set up page configuration
+def detect_header_regions(annotations, field_labels, field_boxes, debug=False):
+    pass
+
+def compute_form_bounds(field_boxes):
+    if not field_boxes:
+        return None
+    x_coords = [box['x1'] for box in field_boxes.values()] + [box['x2'] for box in field_boxes.values()]
+    y_coords = [box['y1'] for box in field_boxes.values()] + [box['y2'] for box in field_boxes.values()]
+    return min(x_coords), min(y_coords), max(x_coords), max(y_coords)
+
+def image_to_base64(image):
+    from io import BytesIO
+    import base64
+    buffered = BytesIO()
+    image.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode()
+
+# Initialize session state properly
+def init_session_state():
+    if "form_layouts" not in st.session_state:
+        st.session_state.form_layouts = {1: {}, 2: {}, 3: {}}
+    if "ocr_blocks" not in st.session_state:
+        st.session_state.ocr_blocks = []
+    if "auto_extracted_fields" not in st.session_state:
+        st.session_state.auto_extracted_fields = {}
+
+init_session_state()
+
+# App layout
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
 st.title("🇬🇷 Greek OCR Annotator — Drag-to-Tag Edition")
 
-# Field labels for Greek form
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
-
-# Initialize session state
-if "form_layouts" not in st.session_state:
-    st.session_state.form_layouts = {i: {} for i in [1, 2, 3]}
-if "ocr_blocks" not in st.session_state:
-    st.session_state.ocr_blocks = []
-if "auto_extracted_fields" not in st.session_state:
-    st.session_state.auto_extracted_fields = {}
 
 # Sidebar controls
 form_num = st.sidebar.selectbox("📄 Φόρμα", [1, 2, 3])
@@ -57,7 +77,7 @@ uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg"
 
 if uploaded_file:
     try:
-        # Read and prepare the image
+        # Read the image file
         image = Image.open(uploaded_file).convert("RGB")
         width, height = image.size
         
@@ -65,11 +85,17 @@ if uploaded_file:
         uploaded_file.seek(0)
         file_bytes = uploaded_file.read()
         
-        # Get form layout for current form number
-        field_boxes = st.session_state.form_layouts.get(form_num, {})
+        # Get or create form layout
+        if form_num not in st.session_state.form_layouts:
+            st.session_state.form_layouts[form_num] = {}
+        field_boxes = st.session_state.form_layouts[form_num]
         
         # Canvas setup
         st.markdown("### 🖱️ Drag to Tag Field Regions")
+        
+        # Create a fresh image for canvas background
+        bg_image = Image.open(BytesIO(file_bytes)).convert("RGB")
+        
         canvas_kwargs = {
             "fill_color": "rgba(0, 255, 0, 0.3)",
             "stroke_width": 2,
@@ -78,29 +104,32 @@ if uploaded_file:
             "width": width,
             "drawing_mode": "rect",
             "key": f"canvas_{form_num}",
-            "background_image": Image.open(uploaded_file).convert("RGB")
+            "background_image": bg_image,
+            "update_streamlit": True
         }
 
-        # Drawable canvas
+        # Drawable canvas with error handling
         try:
             canvas_result = st_canvas(**canvas_kwargs)
+            
+            # Handle drawing results
+            if canvas_result and canvas_result.json_data and canvas_result.json_data.get("objects"):
+                latest = canvas_result.json_data["objects"][-1]
+                x1 = int(latest["left"])
+                y1 = int(latest["top"])
+                x2 = x1 + int(latest["width"])
+                y2 = y1 + int(latest["height"])
+                
+                field_boxes[selected_label] = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+                st.session_state.form_layouts[form_num] = field_boxes
+                st.success(f"✅ Box saved for '{selected_label}' in Φόρμα {form_num}")
+                
         except Exception as e:
             st.error(f"Canvas error: {str(e)}")
             st.stop()
 
-        # Handle canvas drawing results
-        if canvas_result.json_data and canvas_result.json_data.get("objects"):
-            latest = canvas_result.json_data["objects"][-1]
-            x1 = int(latest["left"])
-            y1 = int(latest["top"])
-            x2 = x1 + int(latest["width"])
-            y2 = y1 + int(latest["height"])
-            field_boxes[selected_label] = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
-            st.session_state.form_layouts[form_num] = field_boxes
-            st.success(f"✅ Box saved for '{selected_label}' in Φόρμα {form_num}")
-
         # OCR Processing
-        if cred_file:
+        if cred_file and os.path.exists("credentials.json"):
             try:
                 with st.spinner("🔍 Running OCR..."):
                     # Initialize Google Vision client
@@ -145,13 +174,6 @@ if uploaded_file:
                                 draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=3)
                                 draw.text((x1, y1 - 12), label, fill="green")
                         
-                        # Draw form bounds if available
-                        bounds = compute_form_bounds(field_boxes)
-                        if bounds:
-                            x_min, y_min, x_max, y_max = bounds
-                            draw.rectangle([(x_min, y_min), (x_max, y_max)], outline="green", width=4)
-                            draw.text((x_min, y_min - 30), f"Φόρμα {form_num}", fill="green")
-
                         # Display annotated image
                         st.markdown("### 📌 Tagged Overlay Image")
                         overlay_base64 = image_to_base64(draw_img)
@@ -180,38 +202,6 @@ if uploaded_file:
                                     ]
                                     val = " ".join(matches) if matches else "(no match)"
                                     st.text_input(label, val, key=f"{i}_{label}")
-
-                        # Auto-extraction feature
-                        st.header("🪄 Auto-Extracted Fields")
-                        if st.button("🪄 Auto-Extract from OCR"):
-                            found = {}
-                            normalized_labels = {normalize(lbl): lbl for lbl in field_labels}
-                            
-                            for idx, block in enumerate(st.session_state.ocr_blocks):
-                                txt = normalize(block["text"])
-                                if txt in normalized_labels:
-                                    ref_x, ref_y = block["center"]
-                                    neighbor = None
-                                    min_dist = float("inf")
-                                    
-                                    for other in st.session_state.ocr_blocks[idx+1:]:
-                                        dx = other["center"][0] - ref_x
-                                        dy = other["center"][1] - ref_y
-                                        if dx >= 0 and dy >= 0:
-                                            dist = (dx**2 + dy**2)**0.5
-                                            if dist < min_dist:
-                                                min_dist = dist
-                                                neighbor = other
-                                    
-                                    if neighbor:
-                                        label = normalized_labels[txt]
-                                        found[label] = neighbor["text"]
-                            
-                            st.session_state.auto_extracted_fields = found
-
-                        if st.session_state.auto_extracted_fields:
-                            st.subheader("🧾 Predicted Field Mapping")
-                            st.json(st.session_state.auto_extracted_fields)
 
             except Exception as e:
                 st.error(f"OCR processing failed: {str(e)}")
