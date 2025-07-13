@@ -1,21 +1,12 @@
-
 from unidecode import unidecode
+import numpy as np
 
 def normalize(text):
     return unidecode(text.upper().strip())
 
 def detect_header_regions(annotations, field_labels, layout_dict):
-    # Draw the 8 auto-detected header boxes
-    for label in field_labels:
-        box = field_boxes.get(label)
-        if box and all(k in box for k in ("x1", "y1", "x2", "y2")):
-            x1, y1 = box["x1"], box["y1"]
-            x2, y2 = box["x2"], box["y2"]
-            draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=3)
-            draw.text((x1, y1 - 12), label, fill="green")
-            
     normalized_labels = {normalize(lbl): lbl for lbl in field_labels}
-    for ann in annotations[1:]:
+    for ann in annotations[1:]:  # skip full text block
         txt = normalize(ann.description)
         if txt in normalized_labels:
             label = normalized_labels[txt]
@@ -30,3 +21,15 @@ def detect_header_regions(annotations, field_labels, layout_dict):
                     "x1": x1, "y1": y1,
                     "x2": x2, "y2": y2 + value_height
                 }
+def compute_form_bounds(form_layout):
+    coords = []
+    for box in form_layout.values():
+        if all(k in box for k in ("x1", "y1", "x2", "y2")):
+            coords.extend([
+                (box["x1"], box["y1"]),
+                (box["x2"], box["y2"])
+            ])
+    if not coords:
+        return None
+    xs, ys = zip(*coords)
+    return min(xs), min(ys), max(xs), max(ys)
