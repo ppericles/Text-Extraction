@@ -37,7 +37,7 @@ if "extracted_values" not in st.session_state:
     st.session_state.extracted_values = {i: {} for i in form_ids}
 
 view_mode = st.sidebar.radio("🧭 View Mode", ["Tagging", "Compare All Forms"])
-form_num = st.sidebar.selectbox("📄 Select Φόρμα", form_ids)
+form_num = st.sidebar.selectbox("📄 Φόρμα", form_ids)
 selected_label = st.sidebar.selectbox("📝 Field Label", field_labels)
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
@@ -66,7 +66,7 @@ if view_mode == "Tagging":
     if uploaded_file:
         filename = uploaded_file.name.lower()
         image = Image.open(uploaded_file).convert("RGB")
-        field_boxes = st.session_state.form_layouts[form_num]
+        field_boxes = st.session_state.form_layouts.get(form_num, {})
 
         st.markdown("### 👆 Click twice to define a field box")
         coords = streamlit_image_coordinates(image)
@@ -78,11 +78,11 @@ if view_mode == "Tagging":
                 (x1, y1), (x2, y2) = st.session_state.click_points
                 st.session_state.click_points = []
 
-                nearby_texts = []
-                for b in st.session_state.ocr_blocks:
-                    cx, cy = b["center"]
-                    if min(x1, x2) <= cx <= max(x1, x2) and min(y1, y2) <= cy <= max(y1, y2):
-                        nearby_texts.append(b["text"])
+                nearby_texts = [
+                    b["text"] for b in st.session_state.ocr_blocks
+                    if min(x1, x2) <= b["center"][0] <= max(x1, x2)
+                    and min(y1, y2) <= b["center"][1] <= max(y1, y2)
+                ]
                 candidate = " ".join(nearby_texts).upper()
                 match = get_close_matches(candidate, field_labels, n=1)
                 suggested = match[0] if match else selected_label
@@ -92,14 +92,14 @@ if view_mode == "Tagging":
                     "x1": min(x1, x2), "y1": min(y1, y2),
                     "x2": max(x1, x2), "y2": max(y1, y2)
                 }
+                st.session_state.form_layouts[form_num] = field_boxes
                 st.success(f"✅ Saved box for '{suggested}' (Confidence: {score}%) in Φόρμα {form_num}")
 
         if cred_file and st.button("🔍 Run OCR"):
             try:
                 with st.spinner("Running OCR..."):
                     image_bytes = (
-                        convert_to_jpeg_bytes(image)
-                        if filename.endswith(".jp2")
+                        convert_to_jpeg_bytes(image) if filename.endswith(".jp2")
                         else uploaded_file.getvalue()
                     )
 
@@ -168,7 +168,6 @@ if view_mode == "Tagging":
             mime="application/json"
         )
 
-# === Compare Mode ===
 if view_mode == "Compare All Forms":
     st.markdown("## 📊 Form Comparison Dashboard")
     cols = st.columns(len(form_ids))
