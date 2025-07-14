@@ -7,6 +7,7 @@ from io import BytesIO
 from difflib import get_close_matches, SequenceMatcher
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
+import pandas as pd
 
 from utils.image_utils import image_to_base64
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
@@ -15,25 +16,27 @@ from utils.layout_utils import get_form_bounding_box
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
 st.title("🇬🇷 Greek OCR Annotator")
 
-# === 🧠 Session State ===
+# === 🧠 Session Initialization ===
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 form_ids = [1, 2, 3]
 
-if "form_layouts" not in st.session_state:
-    st.session_state.form_layouts = {i: {} for i in form_ids}
-if "ocr_blocks" not in st.session_state:
-    st.session_state.ocr_blocks = []
-if "click_points" not in st.session_state:
-    st.session_state.click_points = []
-if "extracted_values" not in st.session_state:
-    st.session_state.extracted_values = {i: {} for i in form_ids}
+for key, default in {
+    "form_layouts": {i: {} for i in form_ids},
+    "ocr_blocks": [],
+    "click_points": [],
+    "extracted_values": {i: {} for i in form_ids},
+    "resolved_forms": set(),
+    "current_low_index": 0
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 # === 🗂️ Sidebar Controls ===
-view_mode = st.sidebar.radio("🧭 View Mode", ["Tagging", "Compare All Forms"])
-form_num = st.sidebar.selectbox("📄 Φόρμα", form_ids)
+view_mode = st.sidebar.radio("🧭 View Mode", ["Tagging", "Compare All Forms"], index=0)
+form_num = st.sidebar.selectbox("📄 Φόρμα", form_ids, index=form_ids.index(st.session_state.get("form_num", form_ids[0])))
 selected_label = st.sidebar.selectbox("📝 Field Label", field_labels)
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
@@ -45,21 +48,18 @@ if cred_file:
 
 layout_file = st.sidebar.file_uploader("📂 Import layout (.json)", type=["json"])
 if layout_file:
-    try:
-        raw_layout = json.load(layout_file)
-        filtered = {int(k): v for k, v in raw_layout.items() if k.isdigit()}
-        st.session_state.form_layouts.update(filtered)
-        st.sidebar.success("✅ Layout imported")
-        for fid, fields in filtered.items():
-            count = len(fields)
-            status = "🟢" if count == 8 else "🟡" if count >= 5 else "🔴"
-            st.sidebar.write(f"{status} Φόρμα {fid}: {count} fields")
-    except Exception as e:
-        st.sidebar.error(f"Import failed: {e}")
+    raw_layout = json.load(layout_file)
+    imported = {int(k): v for k, v in raw_layout.items() if k.isdigit()}
+    st.session_state.form_layouts.update(imported)
+    st.sidebar.success("✅ Layout imported")
+    for fid in imported:
+        count = len(imported[fid])
+        status = "🟢" if count == 8 else "🟡" if count >= 5 else "🔴"
+        st.sidebar.write(f"{status} Φόρμα {fid}: {count} fields")
 
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png", "jp2"])
 
-# === 🖼️ Template Preview on Image ===
+# === 🖼️ Image & Layout Preview ===
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     layout = st.session_state.form_layouts.get(form_num, {})
@@ -67,10 +67,10 @@ if uploaded_file:
     draw = ImageDraw.Draw(preview)
     for label, box in layout.items():
         draw.rectangle([(box["x1"], box["y1"]), (box["x2"], box["y2"])], outline="green", width=2)
-        draw.text((box["x1"], box["y1"] - 10), label, fill="green")
-    st.image(preview, caption=f"Φόρμα {form_num} Layout Preview", use_column_width=True)
+        draw.text((box["x1"], box["y1"] - 12), label, fill="green")
+    st.image(preview, caption=f"Layout Preview — Φόρμα {form_num}", use_column_width=True)
 
-# === 🏷️ Click-Based Tagging ===
+# === 🖱️ Tagging Box Interaction ===
 if view_mode == "Tagging" and uploaded_file:
     st.markdown("### 👆 Click twice to tag a field box")
     coords = streamlit_image_coordinates(image)
@@ -85,72 +85,135 @@ if view_mode == "Tagging" and uploaded_file:
                 "x1": min(x1, x2), "y1": min(y1, y2),
                 "x2": max(x1, x2), "y2": max(y1, y2)
             }
-            match = get_close_matches(selected_label, field_labels, n=1)
-            tag = match[0] if match else selected_label
-            st.session_state.form_layouts.setdefault(form_num, {})[tag] = box
-            st.success(f"✅ Saved '{tag}' for Φόρμα {form_num}")
+            tag = get_close_matches(selected_label, field_labels, n=1)
+            label = tag[0] if tag else selected_label
+            st.session_state.form_layouts.setdefault(form_num, {})[label] = box
+            st.success(f"✅ Saved '{label}' for Φόρμα {form_num}")
 
 # === 🔍 OCR Execution ===
 if uploaded_file and cred_file and st.button("🔍 Run OCR"):
-    try:
-        buffer = BytesIO()
-        image.save(buffer, format="JPEG")
-        content = buffer.getvalue()
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG")
+    content = buffer.getvalue()
+    client = vision.ImageAnnotatorClient()
+    response = client.document_text_detection(image=vision.Image(content=content))
+    annotations = response.text_annotations[1:]
+    blocks = []
+    for a in annotations:
+        v = a.bounding_poly.vertices
+        xs = [v.x for v in v if v.x is not None]
+        ys = [v.y for v in v if v.y is not None]
+        if xs and ys:
+            center = (sum(xs) // len(xs), sum(ys) // len(ys))
+            blocks.append({"text": a.description, "center": center})
+    st.session_state.ocr_blocks = blocks
+    st.success("✅ OCR completed")
 
-        client = vision.ImageAnnotatorClient()
-        response = client.document_text_detection(image=vision.Image(content=content))
-        annotations = response.text_annotations[1:]  # skip first full-block
-
-        blocks = []
-        for a in annotations:
-            vertices = a.bounding_poly.vertices
-            xs = [v.x for v in vertices if v.x is not None]
-            ys = [v.y for v in vertices if v.y is not None]
-            if xs and ys:
-                center = (sum(xs) // len(xs), sum(ys) // len(ys))
-                blocks.append({"text": a.description, "center": center})
-        st.session_state.ocr_blocks = blocks
-        st.success("✅ OCR complete")
-    except Exception as e:
-        st.error(f"OCR failed: {e}")
-
-# === 🧠 Extract Fields per Φόρμα ===
+# === 🧠 Extract & Diagnose Field Matches ===
 if view_mode == "Tagging":
     st.subheader(f"🧠 Extracted Fields — Φόρμα {form_num}")
-    extracted = {}
-    blocks = st.session_state.ocr_blocks
     layout = st.session_state.form_layouts.get(form_num, {})
+    blocks = st.session_state.ocr_blocks
+    extracted = {}
 
-    for label in field_labels:
-        box = layout.get(label)
-        value = ""
-        if box and blocks:
-            xmin, xmax = box["x1"], box["x2"]
-            ymin, ymax = box["y1"], box["y2"]
-            hits = [b["text"] for b in blocks if xmin <= b["center"][0] <= xmax and ymin <= b["center"][1] <= ymax]
-            value = " ".join(hits)
-        extracted[label] = value
-        st.text_input(label, value, key=f"{form_num}_{label}")
+    with st.expander("🩺 Field Diagnostics", expanded=True):
+        for label in field_labels:
+            box = layout.get(label)
+            match_count, value = 0, ""
+            if box and blocks:
+                hits = [b["text"] for b in blocks if box["x1"] <= b["center"][0] <= box["x2"] and box["y1"] <= b["center"][1] <= box["y2"]]
+                value = " ".join(hits)
+                match_count = len(hits)
+            extracted[label] = value
+            status = "🟢" if match_count else "🔴"
+            st.text_input(f"{status} {label} — {match_count} hit(s)", value, key=f"{form_num}_{label}")
 
     st.session_state.extracted_values[form_num] = extracted
 
-# === 📊 Form Comparison Dashboard ===
-if view_mode == "Compare All Forms":
-    st.subheader("📊 Comparison Across Forms")
-    for fid in form_ids:
-        layout = st.session_state.form_layouts.get(fid, {})
-        extracted = st.session_state.extracted_values.get(fid, {})
-        tagged = list(layout.keys())
-        missing = [label for label in field_labels if label not in tagged]
-        st.markdown(f"### Φόρμα {fid}")
-        st.write(f"✅ Tagged: {len(tagged)} / 8")
-        if missing:
-            st.write("❌ Missing:", ", ".join(missing))
-        for label in field_labels:
-            value = extracted.get(label, "(no value)")
-            st.text_input(label, value, key=f"compare_{fid}_{label}")
+# === 🌡️ Heatmap Toggle
+show_heatmap = st.checkbox("🌡️ Show confidence heatmap overlay", value=True)
+show_only_mismatches = st.checkbox("🚨 Show only mismatched fields", value=False)
 
-# === 💾 Layout Export ===
+if show_heatmap and uploaded_file and blocks:
+    overlay = image.copy()
+    draw = ImageDraw.Draw(overlay)
+    for label, box in layout.items():
+        hits = [b for b in blocks if box["x1"] <= b["center"][0] <= box["x2"] and box["y1"] <= b["center"][1] <= box["y2"]]
+        if show_only_mismatches and hits:
+            continue
+        count = len(hits)
+        color = "green" if count >= 3 else "orange" if count >= 1 else "red"
+        draw.rectangle([(box["x1"], box["y1"]), (box["x2"], box["y2"])], outline=color, width=3)
+        draw.text((box["x1"], box["y1"] - 12), f"{label} ({count})", fill=color)
+        for b in hits:
+            cx, cy = b["center"]
+            draw.ellipse([(cx - 3, cy - 3), (cx + 3, cy + 3)], fill="red")
+    st.image(overlay, caption="📊 Heatmap Overlay", use_column_width=True)
+
+# === 📊 Diagnostic Dashboard
+st.subheader("📊 Diagnostic Dashboard")
+low_conf_filter = st.checkbox("🔎 Show only Φόρμες below 75% match", value=False)
+
+dashboard_data = []
+for fid in form_ids:
+    layout = st.session_state.form_layouts.get(fid, {})
+    blocks = st.session_state.ocr_blocks
+    row = {"Φόρμα": f"Φόρμα {fid}"}
+    total_hits = 0
+    for label in field_labels:
+        box = layout.get(label)
+        count = 0
+        if box and blocks:
+            hits = [b for b in blocks if box["x1"] <= b["center"][0] <= box["x2"] and box["y1"] <= b["center"][1] <= box["y2"]]
+            count = len(hits)
+        row[label] = count
+        total_hits += int(count > 0)
+    pct = round((total_hits / len(field_labels)) * 100, 1)
+            row["✅ Matched %"] = pct
+    status = "✅ Resolved" if fid in st.session_state.resolved_forms else "❌ Pending"
+    row["🔄 Status"] = status
+    dashboard_data.append(row)
+
+df = pd.DataFrame(dashboard_data)
+
+if low_conf_filter:
+    df = df[df["✅ Matched %"] < 75]
+
+if df.empty:
+    st.info("✅ No low-confidence Φόρμες found.")
+else:
+    styled_df = df.style\
+        .background_gradient(cmap="Greens", subset=["✅ Matched %"])\
+        .highlight_min(axis=0, subset=field_labels, color="mistyrose")\
+        .highlight_max(axis=0, subset=field_labels, color="#e0ffe0")\
+        .applymap(lambda v: "background-color: #d2ffd2" if v == "✅ Resolved" else "background-color: #ffe6e6", subset=["🔄 Status"])
+    st.dataframe(styled_df, use_container_width=True)
+
+# === 🔁 Trouble Spot Navigator ===
+low_conf_forms = [int(row["Φόρμα"].split("Φόρμα ")[-1]) for row in dashboard_data if row["✅ Matched %"] < 75]
+resolved = len(st.session_state.resolved_forms)
+remaining = len(low_conf_forms)
+total = resolved + remaining
+
+st.sidebar.markdown("### 📍 Resolution Progress")
+st.sidebar.progress(resolved / total if total else 1.0)
+st.sidebar.write(f"✅ Resolved: {resolved} / {total}")
+
+queue = [fid for fid in low_conf_forms if fid not in st.session_state.resolved_forms]
+if queue:
+    if st.button(f"🧭 Next Trouble Spot ({len(queue)} remaining)"):
+        next_fid = queue[st.session_state.current_low_index % len(queue)]
+        st.session_state.form_num = next_fid
+        st.session_state.view_mode = "Tagging"
+        st.toast(f"Jumped to Φόρμα {next_fid}")
+        st.session_state.current_low_index += 1
+
+if form_num in low_conf_forms and form_num not in st.session_state.resolved_forms:
+    if st.button("✅ Mark Φόρμα as Resolved"):
+        st.session_state.resolved_forms.add(form_num)
+        st.success(f"Φόρμα {form_num} marked as resolved.")
+
+# === 💾 Final Export Button
 st.markdown("## 💾 Export Layouts")
 st.download_button(
     label="💾 Export Layout as JSON",
