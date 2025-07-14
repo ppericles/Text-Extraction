@@ -52,10 +52,20 @@ layout_file = st.sidebar.file_uploader("📂 Import layout (.json)", type=["json
 if layout_file:
     try:
         raw_layout = json.load(layout_file)
-        st.session_state.form_layouts = {
-            int(k): v for k, v in raw_layout.items() if k.isdigit()
-        }
+        filtered_layout = {int(k): v for k, v in raw_layout.items() if k.isdigit()}
+        st.session_state.form_layouts = filtered_layout
+
         st.sidebar.success("✅ Layout imported")
+
+        for form_id, fields in filtered_layout.items():
+            field_count = len(fields)
+            if field_count >= len(field_labels):
+                status = "🟢 Complete"
+            elif field_count >= 5:
+                status = "🟡 Partial"
+            else:
+                status = "🔴 Incomplete"
+        st.sidebar.write(f"{status} — Φόρμα {form_id}: {field_count} fields")
     except Exception as e:
         st.sidebar.error(f"Import failed: {e}")
 
