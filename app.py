@@ -1,13 +1,12 @@
-# === 🚀 Imports & Setup ===
 import streamlit as st
 from PIL import Image, ImageDraw
 import json
 import os
 from io import BytesIO
-from difflib import get_close_matches, SequenceMatcher
+from difflib import get_close_matches
+import pandas as pd
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
-import pandas as pd
 
 from utils.image_utils import image_to_base64
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
@@ -37,7 +36,7 @@ for key, default in {
 # === 🗂️ Sidebar Controls ===
 view_mode = st.sidebar.radio("🧭 View Mode", ["Tagging", "Compare All Forms"], index=0)
 form_num = st.sidebar.selectbox("📄 Φόρμα", form_ids, index=form_ids.index(st.session_state.get("form_num", form_ids[0])))
-selected_label = st.sidebar.selectbox("📝 Field Label", field_labels)
+selected_label = st.sidebar.selectbox("🏷️ Field Label", field_labels)
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
 if cred_file:
@@ -52,14 +51,10 @@ if layout_file:
     imported = {int(k): v for k, v in raw_layout.items() if k.isdigit()}
     st.session_state.form_layouts.update(imported)
     st.sidebar.success("✅ Layout imported")
-    for fid in imported:
-        count = len(imported[fid])
-        status = "🟢" if count == 8 else "🟡" if count >= 5 else "🔴"
-        st.sidebar.write(f"{status} Φόρμα {fid}: {count} fields")
 
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png", "jp2"])
 
-# === 🖼️ Image & Layout Preview ===
+# === 🖼️ Image Preview ===
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     layout = st.session_state.form_layouts.get(form_num, {})
@@ -67,10 +62,10 @@ if uploaded_file:
     draw = ImageDraw.Draw(preview)
     for label, box in layout.items():
         draw.rectangle([(box["x1"], box["y1"]), (box["x2"], box["y2"])], outline="green", width=2)
-        draw.text((box["x1"], box["y1"] - 12), label, fill="green")
-    st.image(preview, caption=f"Layout Preview — Φόρμα {form_num}", use_column_width=True)
+        draw.text((box["x1"], box["y1"] - 10), label, fill="green")
+    st.image(preview, caption=f"Φόρμα {form_num} Layout Preview", use_column_width=True)
 
-# === 🖱️ Tagging Box Interaction ===
+# === 🖱️ Tagging Interaction ===
 if view_mode == "Tagging" and uploaded_file:
     st.markdown("### 👆 Click twice to tag a field box")
     coords = streamlit_image_coordinates(image)
@@ -90,7 +85,7 @@ if view_mode == "Tagging" and uploaded_file:
             st.session_state.form_layouts.setdefault(form_num, {})[label] = box
             st.success(f"✅ Saved '{label}' for Φόρμα {form_num}")
 
-# === 🔍 OCR Execution ===
+# === 🔍 Run OCR ===
 if uploaded_file and cred_file and st.button("🔍 Run OCR"):
     buffer = BytesIO()
     image.save(buffer, format="JPEG")
@@ -109,7 +104,7 @@ if uploaded_file and cred_file and st.button("🔍 Run OCR"):
     st.session_state.ocr_blocks = blocks
     st.success("✅ OCR completed")
 
-# === 🧠 Extract & Diagnose Field Matches ===
+# === 🧠 Field Extraction & Diagnostics ===
 if view_mode == "Tagging":
     st.subheader(f"🧠 Extracted Fields — Φόρμα {form_num}")
     layout = st.session_state.form_layouts.get(form_num, {})
@@ -130,8 +125,8 @@ if view_mode == "Tagging":
 
     st.session_state.extracted_values[form_num] = extracted
 
-# === 🌡️ Heatmap Toggle
-show_heatmap = st.checkbox("🌡️ Show confidence heatmap overlay", value=True)
+# === 🌡️ Confidence Heatmap Overlay
+show_heatmap = st.checkbox("🌡️ Show heatmap overlay", value=True)
 show_only_mismatches = st.checkbox("🚨 Show only mismatched fields", value=False)
 
 if show_heatmap and uploaded_file and blocks:
@@ -148,13 +143,14 @@ if show_heatmap and uploaded_file and blocks:
         for b in hits:
             cx, cy = b["center"]
             draw.ellipse([(cx - 3, cy - 3), (cx + 3, cy + 3)], fill="red")
-    st.image(overlay, caption="📊 Heatmap Overlay", use_column_width=True)
+    st.image(overlay, caption="🖼️ OCR Match Heatmap", use_column_width=True)
 
-# === 📊 Diagnostic Dashboard
+# === 📊 Diagnostic Dashboard + Navigator
 st.subheader("📊 Diagnostic Dashboard")
-low_conf_filter = st.checkbox("🔎 Show only Φόρμες below 75% match", value=False)
+low_conf_filter = st.checkbox("🔍 Show only Φόρμες below 75% match", value=False)
 
 dashboard_data = []
+
 for fid in form_ids:
     layout = st.session_state.form_layouts.get(fid, {})
     blocks = st.session_state.ocr_blocks
@@ -168,7 +164,7 @@ for fid in form_ids:
             count = len(hits)
         row[label] = count
         total_hits += int(count > 0)
-    pct = round((total_hits / len(field_labels)) * 100, 1)
+        pct = round((total_hits / len(field_labels)) * 100, 1)
             row["✅ Matched %"] = pct
     status = "✅ Resolved" if fid in st.session_state.resolved_forms else "❌ Pending"
     row["🔄 Status"] = status
@@ -213,7 +209,7 @@ if form_num in low_conf_forms and form_num not in st.session_state.resolved_form
         st.session_state.resolved_forms.add(form_num)
         st.success(f"Φόρμα {form_num} marked as resolved.")
 
-# === 💾 Final Export Button
+# === 💾 Layout Export Button ===
 st.markdown("## 💾 Export Layouts")
 st.download_button(
     label="💾 Export Layout as JSON",
