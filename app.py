@@ -1,3 +1,4 @@
+# === 🚀 Imports & Setup ===
 import streamlit as st
 from PIL import Image, ImageDraw
 import json
@@ -8,6 +9,7 @@ import pandas as pd
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
 
+# Replace these with your own utility modules as needed
 from utils.image_utils import image_to_base64
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
 from utils.layout_utils import get_form_bounding_box
@@ -54,6 +56,24 @@ if layout_file:
 
 uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png", "jp2"])
 
+# === 📶 Sidebar Confidence Summary ===
+st.sidebar.markdown("### 🧠 Confidence Summary per Φόρμα")
+dashboard_rows = []
+for fid in form_ids:
+    layout = st.session_state.form_layouts.get(fid, {})
+    blocks = st.session_state.ocr_blocks
+    matched = 0
+    for label in field_labels:
+        box = layout.get(label)
+        if box and blocks:
+            hits = [b for b in blocks if box["x1"] <= b["center"][0] <= box["x2"]
+                                    and box["y1"] <= b["center"][1] <= box["y2"]]
+            if hits:
+                matched += 1
+    pct = round((matched / len(field_labels)) * 100, 1)
+    color = "🟢" if pct >= 85 else "🟡" if pct >= 50 else "🔴"
+    st.sidebar.write(f"{color} Φόρμα {fid}: {pct}% matched")
+
 # === 🖼️ Image Preview ===
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
@@ -63,7 +83,7 @@ if uploaded_file:
     for label, box in layout.items():
         draw.rectangle([(box["x1"], box["y1"]), (box["x2"], box["y2"])], outline="green", width=2)
         draw.text((box["x1"], box["y1"] - 10), label, fill="green")
-    st.image(preview, caption=f"Φόρμα {form_num} Layout Preview", use_column_width=True)
+    st.image(preview, caption=f"Φόρμα {form_num} Layout Preview", use_container_width=True)
 
 # === 🖱️ Tagging Interaction ===
 if view_mode == "Tagging" and uploaded_file:
@@ -104,7 +124,7 @@ if uploaded_file and cred_file and st.button("🔍 Run OCR"):
     st.session_state.ocr_blocks = blocks
     st.success("✅ OCR completed")
 
-# === 🧠 Field Extraction & Diagnostics ===
+# === 🧠 Field Extraction ===
 if view_mode == "Tagging":
     st.subheader(f"🧠 Extracted Fields — Φόρμα {form_num}")
     layout = st.session_state.form_layouts.get(form_num, {})
@@ -125,68 +145,27 @@ if view_mode == "Tagging":
 
     st.session_state.extracted_values[form_num] = extracted
 
-# === 🌡️ Confidence Heatmap Overlay
-show_heatmap = st.checkbox("🌡️ Show heatmap overlay", value=True)
-show_only_mismatches = st.checkbox("🚨 Show only mismatched fields", value=False)
-
-if show_heatmap and uploaded_file and blocks:
-    overlay = image.copy()
-    draw = ImageDraw.Draw(overlay)
-    for label, box in layout.items():
-        hits = [b for b in blocks if box["x1"] <= b["center"][0] <= box["x2"] and box["y1"] <= b["center"][1] <= box["y2"]]
-        if show_only_mismatches and hits:
-            continue
-        count = len(hits)
-        color = "green" if count >= 3 else "orange" if count >= 1 else "red"
-        draw.rectangle([(box["x1"], box["y1"]), (box["x2"], box["y2"])], outline=color, width=3)
-        draw.text((box["x1"], box["y1"] - 12), f"{label} ({count})", fill=color)
-        for b in hits:
-            cx, cy = b["center"]
-            draw.ellipse([(cx - 3, cy - 3), (cx + 3, cy + 3)], fill="red")
-    st.image(overlay, caption="🖼️ OCR Match Heatmap", use_column_width=True)
-
-# === 📊 Diagnostic Dashboard + Navigator
-st.subheader("📊 Diagnostic Dashboard")
-low_conf_filter = st.checkbox("🔍 Show only Φόρμες below 75% match", value=False)
-
+# === 🔁 Resolution Navigator + Export
+low_conf_forms = []
 dashboard_data = []
 
 for fid in form_ids:
     layout = st.session_state.form_layouts.get(fid, {})
     blocks = st.session_state.ocr_blocks
-    row = {"Φόρμα": f"Φόρμα {fid}"}
-    total_hits = 0
+    matched = 0
     for label in field_labels:
         box = layout.get(label)
-        count = 0
         if box and blocks:
             hits = [b for b in blocks if box["x1"] <= b["center"][0] <= box["x2"] and box["y1"] <= b["center"][1] <= box["y2"]]
-            count = len(hits)
-        row[label] = count
-        total_hits += int(count > 0)
-        pct = round((total_hits / len(field_labels)) * 100, 1)
-            row["✅ Matched %"] = pct
+            if hits:
+                matched += 1
+    pct = round((matched / len(field_labels)) * 100, 1)
     status = "✅ Resolved" if fid in st.session_state.resolved_forms else "❌ Pending"
-    row["🔄 Status"] = status
-    dashboard_data.append(row)
+    if pct < 75 and fid not in st.session_state.resolved_forms:
+        low_conf_forms.append(fid)
+    dashboard_data.append({"Φόρμα": f"Φόρμα {fid}", "✅ Matched %": pct, "🔄 Status": status})
 
-df = pd.DataFrame(dashboard_data)
-
-if low_conf_filter:
-    df = df[df["✅ Matched %"] < 75]
-
-if df.empty:
-    st.info("✅ No low-confidence Φόρμες found.")
-else:
-    styled_df = df.style\
-        .background_gradient(cmap="Greens", subset=["✅ Matched %"])\
-        .highlight_min(axis=0, subset=field_labels, color="mistyrose")\
-        .highlight_max(axis=0, subset=field_labels, color="#e0ffe0")\
-        .applymap(lambda v: "background-color: #d2ffd2" if v == "✅ Resolved" else "background-color: #ffe6e6", subset=["🔄 Status"])
-    st.dataframe(styled_df, use_container_width=True)
-
-# === 🔁 Trouble Spot Navigator ===
-low_conf_forms = [int(row["Φόρμα"].split("Φόρμα ")[-1]) for row in dashboard_data if row["✅ Matched %"] < 75]
+resolved = len
 resolved = len(st.session_state.resolved_forms)
 remaining = len(low_conf_forms)
 total = resolved + remaining
@@ -196,6 +175,7 @@ st.sidebar.progress(resolved / total if total else 1.0)
 st.sidebar.write(f"✅ Resolved: {resolved} / {total}")
 
 queue = [fid for fid in low_conf_forms if fid not in st.session_state.resolved_forms]
+
 if queue:
     if st.button(f"🧭 Next Trouble Spot ({len(queue)} remaining)"):
         next_fid = queue[st.session_state.current_low_index % len(queue)]
@@ -209,10 +189,10 @@ if form_num in low_conf_forms and form_num not in st.session_state.resolved_form
         st.session_state.resolved_forms.add(form_num)
         st.success(f"Φόρμα {form_num} marked as resolved.")
 
-# === 💾 Layout Export Button ===
-st.markdown("## 💾 Export Layouts")
+# === 💾 Layout Export ===
+st.markdown("## 💾 Export Tagged Layouts")
 st.download_button(
-    label="💾 Export Layout as JSON",
+    label="💾 Export as JSON",
     data=json.dumps(st.session_state.form_layouts, indent=2, ensure_ascii=False),
     file_name="form_layouts.json",
     mime="application/json"
