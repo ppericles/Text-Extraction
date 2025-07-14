@@ -59,6 +59,8 @@ if layout_file:
 
         for form_id, fields in filtered_layout.items():
             field_count = len(fields)
+
+            # Always define status based on field count
             if field_count >= len(field_labels):
                 status = "🟢 Complete"
             elif field_count >= 5:
