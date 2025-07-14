@@ -5,10 +5,11 @@ import os
 from difflib import SequenceMatcher, get_close_matches
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
+from io import BytesIO
+
 from utils.image_utils import image_to_base64
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
 from utils.layout_utils import get_form_bounding_box
-from io import BytesIO
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
 st.title("🇬🇷 Greek OCR Annotator — JP2-Compatible Edition")
@@ -20,13 +21,12 @@ field_labels = [
 
 form_ids = [1, 2, 3]
 
-# === Helper for JPEG Conversion ===
 def convert_to_jpeg_bytes(pil_image):
     with BytesIO() as buffer:
         pil_image.save(buffer, format="JPEG")
         return buffer.getvalue()
 
-# === Session state init ===
+# Initialize session state
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in form_ids}
 if "ocr_blocks" not in st.session_state:
@@ -50,21 +50,25 @@ if cred_file:
 layout_file = st.sidebar.file_uploader("📂 Import layout (.json)", type=["json"])
 if layout_file:
     try:
-        st.session_state.form_layouts = json.load(layout_file)
+        raw_layout = json.load(layout_file)
+        st.session_state.form_layouts = {int(k): v for k, v in raw_layout.items()}
         st.sidebar.success("✅ Layout imported")
     except Exception as e:
         st.sidebar.error(f"Import failed: {e}")
 
-uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png", "jp2"])
+uploaded_file = st.file_uploader(
+    "📎 Upload scanned form",
+    type=["jpg", "jpeg", "png", "jp2"],
+    help="💡 Drag-and-drop may work better for .jp2 files due to browser MIME quirks"
+)
 
-# === Tagging Mode ===
 if view_mode == "Tagging":
     if uploaded_file:
         filename = uploaded_file.name.lower()
         image = Image.open(uploaded_file).convert("RGB")
         field_boxes = st.session_state.form_layouts[form_num]
 
-        st.markdown("### 👆 Tagging Mode: Click twice to create a box")
+        st.markdown("### 👆 Click twice to define a field box")
         coords = streamlit_image_coordinates(image)
         if coords:
             st.session_state.click_points.append((coords["x"], coords["y"]))
@@ -93,10 +97,11 @@ if view_mode == "Tagging":
         if cred_file and st.button("🔍 Run OCR"):
             try:
                 with st.spinner("Running OCR..."):
-                    if filename.endswith(".jp2"):
-                        image_bytes = convert_to_jpeg_bytes(image)
-                    else:
-                        image_bytes = uploaded_file.getvalue()
+                    image_bytes = (
+                        convert_to_jpeg_bytes(image)
+                        if filename.endswith(".jp2")
+                        else uploaded_file.getvalue()
+                    )
 
                     client = vision.ImageAnnotatorClient()
                     vision_img = vision.Image(content=image_bytes)
@@ -179,4 +184,4 @@ if view_mode == "Compare All Forms":
                 st.write("❌ Missing:", ", ".join(missing))
             for label in field_labels:
                 value = extracted.get(label, "(no value)")
-                st.text_input(label, value, key=f"compare_{form_id}_{label}")
+               
