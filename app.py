@@ -26,7 +26,7 @@ def convert_to_jpeg_bytes(pil_image):
         pil_image.save(buffer, format="JPEG")
         return buffer.getvalue()
 
-# Initialize session state
+# Session state
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in form_ids}
 if "ocr_blocks" not in st.session_state:
@@ -62,6 +62,21 @@ uploaded_file = st.file_uploader(
     help="💡 Drag-and-drop may work better for .jp2 files due to browser MIME quirks"
 )
 
+# === Preview Template on Uploaded Image ===
+if uploaded_file and st.session_state.form_layouts.get(form_num):
+    image = Image.open(uploaded_file).convert("RGB")
+    preview = image.copy()
+    draw = ImageDraw.Draw(preview)
+
+    field_boxes = st.session_state.form_layouts.get(form_num, {})
+    for label, box in field_boxes.items():
+        draw.rectangle([(box["x1"], box["y1"]), (box["x2"], box["y2"])], outline="green", width=3)
+        draw.text((box["x1"], box["y1"] - 12), label, fill="green")
+
+    st.markdown("### 🧾 Template Preview on Current Image")
+    st.image(preview, caption="Check box alignment before OCR", use_column_width=True)
+
+# === Tagging Mode ===
 if view_mode == "Tagging":
     if uploaded_file:
         filename = uploaded_file.name.lower()
@@ -167,20 +182,3 @@ if view_mode == "Tagging":
             file_name="form_layouts.json",
             mime="application/json"
         )
-
-if view_mode == "Compare All Forms":
-    st.markdown("## 📊 Form Comparison Dashboard")
-    cols = st.columns(len(form_ids))
-    for idx, form_id in enumerate(form_ids):
-        with cols[idx]:
-            st.markdown(f"### Φόρμα {form_id}")
-            field_boxes = st.session_state.form_layouts.get(form_id, {})
-            extracted = st.session_state.extracted_values.get(form_id, {})
-            tagged = list(field_boxes.keys())
-            missing = [f for f in field_labels if f not in tagged]
-            st.write(f"✅ Tagged: {len(tagged)} / {len(field_labels)}")
-            if missing:
-                st.write("❌ Missing:", ", ".join(missing))
-            for label in field_labels:
-                value = extracted.get(label, "(no value)")
-                st.text_input(label, value, key=f"compare_{form_id}_{label}")
