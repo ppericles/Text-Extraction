@@ -184,4 +184,4 @@ if view_mode == "Compare All Forms":
                 st.write("❌ Missing:", ", ".join(missing))
             for label in field_labels:
                 value = extracted.get(label, "(no value)")
-               
+                st.text_input(label, value, key=f"compare_{form_id}_{label}")
