@@ -26,7 +26,7 @@ def convert_to_jpeg_bytes(pil_image):
         pil_image.save(buffer, format="JPEG")
         return buffer.getvalue()
 
-# Session state
+# Session state initialization
 if "form_layouts" not in st.session_state:
     st.session_state.form_layouts = {i: {} for i in form_ids}
 if "ocr_blocks" not in st.session_state:
@@ -36,6 +36,7 @@ if "click_points" not in st.session_state:
 if "extracted_values" not in st.session_state:
     st.session_state.extracted_values = {i: {} for i in form_ids}
 
+# Sidebar inputs
 view_mode = st.sidebar.radio("🧭 View Mode", ["Tagging", "Compare All Forms"])
 form_num = st.sidebar.selectbox("📄 Φόρμα", form_ids)
 selected_label = st.sidebar.selectbox("📝 Field Label", field_labels)
@@ -51,7 +52,9 @@ layout_file = st.sidebar.file_uploader("📂 Import layout (.json)", type=["json
 if layout_file:
     try:
         raw_layout = json.load(layout_file)
-        st.session_state.form_layouts = {int(k): v for k, v in raw_layout.items()}
+        st.session_state.form_layouts = {
+            int(k): v for k, v in raw_layout.items() if k.isdigit()
+        }
         st.sidebar.success("✅ Layout imported")
     except Exception as e:
         st.sidebar.error(f"Import failed: {e}")
@@ -62,19 +65,19 @@ uploaded_file = st.file_uploader(
     help="💡 Drag-and-drop may work better for .jp2 files due to browser MIME quirks"
 )
 
-# === Preview Template on Uploaded Image ===
+# === Preview layout overlay ===
 if uploaded_file and st.session_state.form_layouts.get(form_num):
     image = Image.open(uploaded_file).convert("RGB")
-    preview = image.copy()
-    draw = ImageDraw.Draw(preview)
+    preview_img = image.copy()
+    draw = ImageDraw.Draw(preview_img)
+    boxes = st.session_state.form_layouts[form_num]
 
-    field_boxes = st.session_state.form_layouts.get(form_num, {})
-    for label, box in field_boxes.items():
+    for label, box in boxes.items():
         draw.rectangle([(box["x1"], box["y1"]), (box["x2"], box["y2"])], outline="green", width=3)
         draw.text((box["x1"], box["y1"] - 12), label, fill="green")
 
-    st.markdown("### 🧾 Template Preview on Current Image")
-    st.image(preview, caption="Check box alignment before OCR", use_column_width=True)
+    st.markdown("### 🧾 Template Layout Preview")
+    st.image(preview_img, caption="Overlay of template layout", use_column_width=True)
 
 # === Tagging Mode ===
 if view_mode == "Tagging":
@@ -108,7 +111,7 @@ if view_mode == "Tagging":
                     "x2": max(x1, x2), "y2": max(y1, y2)
                 }
                 st.session_state.form_layouts[form_num] = field_boxes
-                st.success(f"✅ Saved box for '{suggested}' (Confidence: {score}%) in Φόρμα {form_num}")
+                st.success(f"✅ Saved box for '{suggested}' (Confidence: {score}%)")
 
         if cred_file and st.button("🔍 Run OCR"):
             try:
@@ -138,14 +141,12 @@ if view_mode == "Tagging":
                         draw.rectangle([(x1a, y1a), (x2a, y2a)], outline="red", width=1)
                         draw.text((x1a, y1a - 10), ann.description, fill="blue")
 
-                    for label in field_labels:
-                        box = field_boxes.get(label)
-                        if box:
-                            draw.rectangle(
-                                [(box["x1"], box["y1"]), (box["x2"], box["y2"])],
-                                outline="green", width=3
-                            )
-                            draw.text((box["x1"], box["y1"] - 12), label, fill="green")
+                    for label, box in field_boxes.items():
+                        draw.rectangle(
+                            [(box["x1"], box["y1"]), (box["x2"], box["y2"])],
+                            outline="green", width=3
+                        )
+                        draw.text((box["x1"], box["y1"] - 12), label, fill="green")
 
                     st.session_state.ocr_blocks = blocks
 
