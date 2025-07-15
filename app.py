@@ -128,6 +128,30 @@ if uploaded_file and cred_file and doc_type == "Registry Book (handwritten)":
                 response = client.document_text_detection(image=vision_img)
                 row_text = response.full_text_annotation.text.strip()
 
+                # === Auto-structure each row into field data
+                field_data = {}
+                lines = row_text.split("\n")
+
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    if "Επώνυμο" in line or "Επ." in line:
+                        field_data["Επώνυμο"] = line.split(":")[-1].strip()
+                    elif "Όνομα" in line or "Κύριο Όνομα" in line:
+                        field_data["Κύριο Όνομα"] = line.split(":")[-1].strip()
+                    elif "Πατρός" in line:
+                        field_data["Όνομα Πατρός"] = line.split(":")[-1].strip()
+                    elif "Μητρός" in line:
+                        field_data["Όνομα Μητρός"] = line.split(":")[-1].strip()
+                    elif "Τόπος" in line or "Γεννήσεως" in line:
+                        field_data["Τόπος Γεννήσεως"] = line.split(":")[-1].strip()
+                    elif any(ch.isdigit() for ch in line) and "19" in line:
+                        field_data["Έτος Γεννήσεως"] = line.strip()
+                    # Display structured output
+                    st.json(field_data)
+
                 extracted_rows[f"Row {i+1}"] = row_text
                 st.image(pil_crop, caption=f"📎 Φόρμα {fid} — Row {i+1}", width=600)
                 st.text_area(f"OCR — Φόρμα {fid}, Row {i+1}", value=row_text, height=160)
