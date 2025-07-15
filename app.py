@@ -120,6 +120,10 @@ if uploaded_file and cred_file and st.button("🔍 Auto-Detect Layout with AI"):
     detected_layout = layout_detector.detect_layout_and_extract_fields(temp_path)
     st.session_state.form_layouts.update(detected_layout)
     st.success("✅ Layout loaded from LayoutParser")
+if uploaded_file and st.button("Test Button"):
+    st.success("✅ Button is working")
+
+
 
 # === 🔍 OCR Trigger
 if uploaded_file and cred_file and st.button("🔍 Run OCR"):
