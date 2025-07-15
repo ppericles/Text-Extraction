@@ -6,12 +6,11 @@ from io import BytesIO
 from difflib import get_close_matches
 import numpy as np
 import cv2
-import pandas as pd
 from google.cloud import vision
 from google.cloud.vision_v1 import types
 from streamlit_image_coordinates import streamlit_image_coordinates
 
-# === Optional utility modules ===
+# Optional: replace with your own utilities
 from utils.image_utils import image_to_base64
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
 from utils.layout_utils import get_form_bounding_box
@@ -20,7 +19,7 @@ import layout_detector
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
 st.title("🇬🇷 Greek OCR Annotator")
 
-# === 🧠 Session Initialization ===
+# === Session Initialization ===
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
@@ -38,9 +37,9 @@ for key, default in {
     if key not in st.session_state:
         st.session_state[key] = default
 
-# === 🗂️ Sidebar Controls ===
+# === Sidebar Controls ===
 view_mode = st.sidebar.radio("🧭 View Mode", ["Tagging", "Compare All Forms"], index=0)
-form_num = st.sidebar.selectbox("📄 Φόρμα", form_ids, index=form_ids.index(st.session_state.get("form_num", form_ids[0])))
+form_num = st.sidebar.selectbox("📄 Φόρμα", form_ids)
 selected_label = st.sidebar.selectbox("🏷️ Field Label", field_labels)
 
 doc_type = st.sidebar.selectbox(
@@ -67,7 +66,7 @@ uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg"
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
 
-# === 📶 Sidebar Confidence Summary ===
+# === Sidebar Confidence Summary ===
 st.sidebar.markdown("### 🧠 Confidence Summary per Φόρμα")
 for fid in form_ids:
     layout = st.session_state.form_layouts.get(fid, {})
@@ -80,7 +79,7 @@ for fid in form_ids:
     color = "🟢" if pct >= 85 else "🟡" if pct >= 50 else "🔴"
     st.sidebar.write(f"{color} Φόρμα {fid}: {pct}% matched")
 
-# === 🖼️ Image Preview ===
+# === Image Preview with Tagged Layout
 if uploaded_file:
     layout = st.session_state.form_layouts.get(form_num, {})
     preview = image.copy()
@@ -90,7 +89,7 @@ if uploaded_file:
         draw.text((box["x1"], box["y1"] - 10), label, fill="green")
     st.image(preview, caption=f"Φόρμα {form_num} Layout Preview", use_container_width=True)
 
-# === 🖱️ Tagging Interaction + Auto Extract ===
+# === Tagging Interaction ===
 if view_mode == "Tagging" and uploaded_file:
     st.markdown("### 👆 Click twice to tag a field box")
     coords = streamlit_image_coordinates(image)
@@ -110,14 +109,13 @@ if view_mode == "Tagging" and uploaded_file:
             st.session_state.form_layouts.setdefault(form_num, {})[label] = box
             st.success(f"✅ Saved '{label}' for Φόρμα {form_num}")
 
-            # 🧠 Live re-extract
             blocks = st.session_state.ocr_blocks
             hits = [b["text"] for b in blocks if box["x1"] <= b["center"][0] <= box["x2"]
                                            and box["y1"] <= b["center"][1] <= box["y2"]]
             st.session_state.extracted_values[form_num][label] = " ".join(hits)
             st.toast(f"🔁 Updated extracted value for '{label}'")
 
-# === 🔍 AI Layout Detection (only for non-registry)
+# === AI Layout Detection (Forms Only)
 if uploaded_file and cred_file and doc_type != "Registry Book (handwritten)":
     if st.button("🔍 Auto-Detect Layout with AI"):
         temp_path = "temp_scan.jpg"
@@ -127,7 +125,7 @@ if uploaded_file and cred_file and doc_type != "Registry Book (handwritten)":
         st.session_state.form_layouts.update(detected_layout)
         st.success("✅ Layout loaded from LayoutParser")
 
-# === 🔍 Standard OCR Button
+# === Full-page OCR
 if uploaded_file and cred_file and st.button("🔍 Run OCR"):
     buffer = BytesIO()
     image.save(buffer, format="JPEG")
@@ -146,7 +144,28 @@ if uploaded_file and cred_file and st.button("🔍 Run OCR"):
     st.session_state.ocr_blocks = blocks
     st.success("✅ OCR completed")
 
-# === 🧠 Row-Wise OCR (only for Registry mode)
+# === Row Layout Preview (OpenCV)
+if uploaded_file and doc_type == "Registry Book (handwritten)":
+    if st.button("📐 Preview Row Layout"):
+        np_image = np.array(image)
+        gray = cv2.cvtColor(np_image, cv2.COLOR_RGB2GRAY)
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        thresh = cv2.threshold(blurred, 160, 255, cv2.THRESH_BINARY_INV)[1]
+        dilated = cv2.dilate(thresh, np.ones((3, 3), np.uint8), iterations=1)
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        row_contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[1])
+
+        annotated = np_image.copy()
+        for i, contour in enumerate(row_contours):
+            x, y, w, h = cv2.boundingRect(contour)
+            if h < 30 or w < 150:
+                continue
+            cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.putText(annotated, f"Row {i+1}", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (0, 0, 255), 1)
+        st.image(annotated, caption="📐 OpenCV-detected Row Layout Preview", use_column_width=True)
+
+# === 🧠 Row-wise OCR
 if uploaded_file and cred_file and doc_type == "Registry Book (handwritten)":
     if st.button("🧠 Run Row-wise OCR"):
         np_image = np.array(image)
@@ -158,24 +177,61 @@ if uploaded_file and cred_file and doc_type == "Registry Book (handwritten)":
         row_contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[1])
 
         client = vision.ImageAnnotatorClient()
-        st.subheader(f"📋 Registry Rows Detected: {len(row_contours)}")
+        st.subheader(f"📋 Rows Detected: {len(row_contours)}")
 
         for i, contour in enumerate(row_contours):
             x, y, w, h = cv2.boundingRect(contour)
             if h < 30 or w < 150:
                 continue
+
             row_crop = np_image[y:y+h, x:x+w]
-                    pil_crop = Image.fromarray(row_crop)
-        buffer = BytesIO()
-        pil_crop.save(buffer, format="JPEG")
-        vision_img = types.Image(content=buffer.getvalue())
+            pil_crop = Image.fromarray(row_crop)
+            buffer = BytesIO()
+            pil_crop.save(buffer, format="JPEG")
+            vision_img = types.Image(content=buffer.getvalue())
+            response = client.document_text_detection(image=vision_img)
+            row_text = response.full_text_annotation.text.strip()
 
-        response = client.document_text_detection(image=vision_img)
-        row_text = response.full_text_annotation.text.strip()
+            st.image(pil_crop, caption=f"📎 Entry {i+1}", width=600)
+            st.text_area(f"OCR — Entry {i+1}", value=row_text, height=180)
+# === 📊 Resolution Navigator
+low_conf_forms = []
+dashboard_data = []
 
-        st.image(pil_crop, caption=f"📎 Entry {i+1}", width=600)
-        st.text_area(f"OCR — Entry {i+1}", value=row_text, height=180)
-# === 💾 Layout Export ===
+for fid in form_ids:
+    layout = st.session_state.form_layouts.get(fid, {})
+    blocks = st.session_state.ocr_blocks
+    matched = sum(1 for label in field_labels if layout.get(label)
+        and any(box["x1"] <= b["center"][0] <= box["x2"] and
+                box["y1"] <= b["center"][1] <= box["y2"]
+                for box in blocks))
+    pct = round((matched / len(field_labels)) * 100, 1)
+    status = "✅ Resolved" if fid in st.session_state.resolved_forms else "❌ Pending"
+    if pct < 75 and fid not in st.session_state.resolved_forms:
+        low_conf_forms.append(fid)
+    dashboard_data.append({"Φόρμα": f"Φόρμα {fid}", "✅ Matched %": pct, "🔄 Status": status})
+
+resolved = len(st.session_state.resolved_forms)
+remaining = len(low_conf_forms)
+total = resolved + remaining
+st.sidebar.markdown("### 📍 Resolution Progress")
+st.sidebar.progress(resolved / total if total else 1.0)
+st.sidebar.write(f"✅ Resolved: {resolved} / {total}")
+
+queue = [fid for fid in low_conf_forms if fid not in st.session_state.resolved_forms]
+if queue and st.button(f"🧭 Next Trouble Spot ({len(queue)} remaining)"):
+    next_fid = queue[st.session_state.current_low_index % len(queue)]
+    st.session_state.form_num = next_fid
+    st.session_state.view_mode = "Tagging"
+    st.toast(f"Jumped to Φόρμα {next_fid}")
+    st.session_state.current_low_index += 1
+
+if form_num in low_conf_forms and form_num not in st.session_state.resolved_forms:
+    if st.button("✅ Mark Φόρμα as Resolved"):
+        st.session_state.resolved_forms.add(form_num)
+        st.success(f"Φόρμα {form_num} marked as resolved.")
+
+# === 💾 Export Tagged Layouts
 st.markdown("## 💾 Export Tagged Layouts")
 st.download_button(
     label="💾 Export as JSON",
