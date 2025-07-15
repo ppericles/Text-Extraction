@@ -10,20 +10,20 @@ from google.cloud.vision_v1 import types
 from streamlit_image_coordinates import streamlit_image_coordinates
 from difflib import get_close_matches
 
-# === Initialize layout engine if needed ===
+# === Optional: layout parser
 import layout_detector
 
 st.set_page_config(layout="wide", page_title="Greek OCR Annotator")
 st.title("🇬🇷 Greek OCR Annotator")
 
-# === Form settings ===
+# === Field and Form Setup
 field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 form_ids = [1, 2, 3]
 
-# === Session state ===
+# === Session State Initialization
 for key, default in {
     "form_layouts": {i: {} for i in form_ids},
     "ocr_blocks": [],
@@ -35,7 +35,7 @@ for key, default in {
     if key not in st.session_state:
         st.session_state[key] = default
 
-# === Sidebar ===
+# === Sidebar Controls
 view_mode = st.sidebar.radio("🧭 View Mode", ["Tagging", "Compare All Forms"])
 form_num = st.sidebar.selectbox("📄 Φόρμα", form_ids)
 selected_label = st.sidebar.selectbox("🏷️ Field Label", field_labels)
@@ -55,24 +55,11 @@ if layout_file:
     st.session_state.form_layouts.update(imported)
     st.sidebar.success("✅ Layout imported")
 
-uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png", "jp2"])
+uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg", "png"])
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
 
-# === Confidence summary per form ===
-st.sidebar.markdown("### 🧠 Confidence Summary")
-for fid in form_ids:
-    layout = st.session_state.form_layouts.get(fid, {})
-    blocks = st.session_state.ocr_blocks
-    matched = sum(1 for label in field_labels if layout.get(label)
-        and any(box["x1"] <= b["center"][0] <= box["x2"]
-                and box["y1"] <= b["center"][1] <= box["y2"]
-                for b in blocks))
-    pct = round((matched / len(field_labels)) * 100, 1)
-    color = "🟢" if pct >= 85 else "🟡" if pct >= 50 else "🔴"
-    st.sidebar.write(f"{color} Φόρμα {fid}: {pct}% matched")
-
-# === Layout preview ===
+# === Layout Preview
 if uploaded_file:
     layout = st.session_state.form_layouts.get(form_num, {})
     preview = image.copy()
@@ -82,7 +69,7 @@ if uploaded_file:
         draw.text((box["x1"], box["y1"] - 10), label, fill="green")
     st.image(preview, caption=f"Φόρμα {form_num} Layout Preview", use_container_width=True)
 
-# === Tagging interaction ===
+# === Tagging Interaction
 if view_mode == "Tagging" and uploaded_file:
     st.markdown("### 👆 Click twice to tag a field box")
     coords = streamlit_image_coordinates(image)
@@ -101,51 +88,17 @@ if view_mode == "Tagging" and uploaded_file:
             st.session_state.form_layouts.setdefault(form_num, {})[label] = box
             st.success(f"✅ Saved '{label}' for Φόρμα {form_num}")
 
-            hits = [b["text"] for b in st.session_state.ocr_blocks if box["x1"] <= b["center"][0] <= box["x2"]
-                    and box["y1"] <= b["center"][1] <= box["y2"]]
-            st.session_state.extracted_values[form_num][label] = " ".join(hits)
-            st.toast(f"🔁 Updated extracted value for '{label}'")
-
-# === AI layout detection (forms only)
-if uploaded_file and cred_file and doc_type != "Registry Book (handwritten)":
-    if st.button("🔍 Auto-Detect Layout with AI"):
-        temp_path = "temp_scan.jpg"
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.getvalue())
-        detected_layout = layout_detector.detect_layout_and_extract_fields(temp_path)
-        st.session_state.form_layouts.update(detected_layout)
-        st.success("✅ Layout loaded from LayoutParser")
-
-# === Full-page OCR
-if uploaded_file and cred_file and st.button("🔍 Run OCR"):
-    buffer = BytesIO()
-    image.save(buffer, format="JPEG")
-    content = buffer.getvalue()
-    client = vision.ImageAnnotatorClient()
-    response = client.document_text_detection(image=vision.Image(content=content))
-    annotations = response.text_annotations[1:]
-    blocks = []
-    for a in annotations:
-        v = a.bounding_poly.vertices
-        xs = [v.x for v in v if v.x is not None]
-        ys = [v.y for v in v if v.y is not None]
-        if xs and ys:
-            center = (sum(xs) // len(xs), sum(ys) // len(ys))
-            blocks.append({"text": a.description, "center": center})
-    st.session_state.ocr_blocks = blocks
-    st.success("✅ OCR completed")
-
-# === Registry row-wise OCR with 3-form segmentation
+# === Row-wise OCR with Three-Form Segmentation
 if uploaded_file and cred_file and doc_type == "Registry Book (handwritten)":
     if st.button("🧠 Run Row-wise OCR"):
         np_image = np.array(image)
         height, width, _ = np_image.shape
-        chunk_w = width // 3
+        chunk_width = width // 3
 
         form_chunks = {
-            1: np_image[:, 0:chunk_w],
-            2: np_image[:, chunk_w:2*chunk_w],
-            3: np_image[:, 2*chunk_w:width]
+            1: np_image[:, 0:chunk_width],
+            2: np_image[:, chunk_width:2*chunk_width],
+            3: np_image[:, 2*chunk_width:]
         }
 
         client = vision.ImageAnnotatorClient()
@@ -155,34 +108,33 @@ if uploaded_file and cred_file and doc_type == "Registry Book (handwritten)":
             gray = cv2.cvtColor(chunk, cv2.COLOR_RGB2GRAY)
             blurred = cv2.GaussianBlur(gray, (3, 3), 0)
             thresh = cv2.threshold(blurred, 160, 255, cv2.THRESH_BINARY_INV)[1]
-            dilated = cv2.dilate(thresh, np.ones((3, 3), np.uint8), iterations=1)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
+            dilated = cv2.dilate(thresh, kernel, iterations=1)
             contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             rows = sorted(contours, key=lambda c: cv2.boundingRect(c)[1])
 
-            st.write(f"📋 Rows Detected: {len(rows)}")
-            extracted_rows = []
+            extracted_rows = {}
 
             for i, contour in enumerate(rows):
                 x, y, w, h = cv2.boundingRect(contour)
                 if h < 30 or w < 150:
                     continue
 
-                row_crop = chunk[y:y+h, x:x+w]
-                pil_crop = Image.fromarray(row_crop)
+                crop = chunk[y:y+h, x:x+w]
+                pil_crop = Image.fromarray(crop)
                 buffer = BytesIO()
                 pil_crop.save(buffer, format="JPEG")
                 vision_img = types.Image(content=buffer.getvalue())
-
                 response = client.document_text_detection(image=vision_img)
                 row_text = response.full_text_annotation.text.strip()
 
-                extracted_rows.append({f"Row {i+1}": row_text})
+                extracted_rows[f"Row {i+1}"] = row_text
                 st.image(pil_crop, caption=f"📎 Φόρμα {fid} — Row {i+1}", width=600)
                 st.text_area(f"OCR — Φόρμα {fid}, Row {i+1}", value=row_text, height=160)
 
-            # Store results in session state per form
             st.session_state.extracted_values[fid] = extracted_rows
-# === 💾 Export Tagged Layouts
+
+# === Export Tagged Layout
 st.markdown("## 💾 Export Tagged Layouts")
 st.download_button(
     label="💾 Export as JSON",
