@@ -162,7 +162,7 @@ if uploaded_file and cred_file and doc_type == "Registry Book (handwritten)":
             st.write(f"📋 Rows Detected: {len(rows)}")
             extracted_rows = []
 
-                        for i, contour in enumerate(rows):
+            for i, contour in enumerate(rows):
                 x, y, w, h = cv2.boundingRect(contour)
                 if h < 30 or w < 150:
                     continue
