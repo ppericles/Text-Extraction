@@ -106,8 +106,20 @@ if uploaded_file and cred_file and st.button("📊 Run Table OCR for All 3 Forms
         for (r, c), text in form_data.items():
             st.write(f"🔹 Row {r+1}, Col {c+1}: {text}")
 
-# === Export
+def sanitize_extracted_values(data):
+    clean = {}
+    for form_id, cells in data.items():
+        form_str = str(form_id)
+        clean[form_str] = {}
+        for key, value in cells.items():
+            key_str = str(key)
+            val_str = str(value)
+            clean[form_str][key_str] = val_str
+    return clean
+
+# === 💾 Export Structured Data
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Structured Data")
-    export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
+    clean_data = sanitize_extracted_values(st.session_state.extracted_values)
+    export_json = json.dumps(clean_data, indent=2, ensure_ascii=False)
     st.download_button("💾 Export as JSON", data=export_json, file_name="form_data.json", mime="application/json")
