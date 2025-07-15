@@ -5,3 +5,4 @@ pillow
 google-cloud-vision
 unidecode
 streamlit-image-coordinates==0.1.2
+layoutparser[layoutmodels,ocr]
