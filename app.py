@@ -168,7 +168,7 @@ for fid in form_ids:
             if hits:
                 matched += 1
     pct = round((matched / len(field_labels)) * 100, 1)
-       status = "✅ Resolved" if fid in st.session_state.resolved_forms else "❌ Pending"
+    status = "✅ Resolved" if fid in st.session_state.resolved_forms else "❌ Pending"
     if pct < 75 and fid not in st.session_state.resolved_forms:
         low_conf_forms.append(fid)
     dashboard_data.append({"Φόρμα": f"Φόρμα {fid}", "✅ Matched %": pct, "🔄 Status": status})
