@@ -1,4 +1,3 @@
-# === 🚀 Imports & Setup ===
 import streamlit as st
 from PIL import Image, ImageDraw
 import json
@@ -9,7 +8,7 @@ import pandas as pd
 from google.cloud import vision
 from streamlit_image_coordinates import streamlit_image_coordinates
 
-# Replace these with your own utility modules as needed
+# Optional: replace with your own utility modules
 from utils.image_utils import image_to_base64
 from utils.ocr_utils import normalize, detect_header_regions, compute_form_bounds
 from utils.layout_utils import get_form_bounding_box
@@ -58,7 +57,6 @@ uploaded_file = st.file_uploader("📎 Upload scanned form", type=["jpg", "jpeg"
 
 # === 📶 Sidebar Confidence Summary ===
 st.sidebar.markdown("### 🧠 Confidence Summary per Φόρμα")
-dashboard_rows = []
 for fid in form_ids:
     layout = st.session_state.form_layouts.get(fid, {})
     blocks = st.session_state.ocr_blocks
@@ -67,7 +65,7 @@ for fid in form_ids:
         box = layout.get(label)
         if box and blocks:
             hits = [b for b in blocks if box["x1"] <= b["center"][0] <= box["x2"]
-                                    and box["y1"] <= b["center"][1] <= box["y2"]]
+                                  and box["y1"] <= b["center"][1] <= box["y2"]]
             if hits:
                 matched += 1
     pct = round((matched / len(field_labels)) * 100, 1)
@@ -85,7 +83,7 @@ if uploaded_file:
         draw.text((box["x1"], box["y1"] - 10), label, fill="green")
     st.image(preview, caption=f"Φόρμα {form_num} Layout Preview", use_container_width=True)
 
-# === 🖱️ Tagging Interaction ===
+# === 🖱️ Tagging Interaction + Auto Extract ===
 if view_mode == "Tagging" and uploaded_file:
     st.markdown("### 👆 Click twice to tag a field box")
     coords = streamlit_image_coordinates(image)
@@ -105,7 +103,15 @@ if view_mode == "Tagging" and uploaded_file:
             st.session_state.form_layouts.setdefault(form_num, {})[label] = box
             st.success(f"✅ Saved '{label}' for Φόρμα {form_num}")
 
-# === 🔍 Run OCR ===
+            # 🧠 Live re-extract after tagging
+            blocks = st.session_state.ocr_blocks
+            hits = [b["text"] for b in blocks if box["x1"] <= b["center"][0] <= box["x2"]
+                                          and box["y1"] <= b["center"][1] <= box["y2"]]
+            value = " ".join(hits)
+            st.session_state.extracted_values[form_num][label] = value
+            st.toast(f"🔁 Updated extracted value for '{label}'")
+
+# === 🔍 OCR Trigger
 if uploaded_file and cred_file and st.button("🔍 Run OCR"):
     buffer = BytesIO()
     image.save(buffer, format="JPEG")
@@ -124,7 +130,7 @@ if uploaded_file and cred_file and st.button("🔍 Run OCR"):
     st.session_state.ocr_blocks = blocks
     st.success("✅ OCR completed")
 
-# === 🧠 Field Extraction ===
+# === 🩺 Field Diagnostics
 if view_mode == "Tagging":
     st.subheader(f"🧠 Extracted Fields — Φόρμα {form_num}")
     layout = st.session_state.form_layouts.get(form_num, {})
@@ -136,7 +142,8 @@ if view_mode == "Tagging":
             box = layout.get(label)
             match_count, value = 0, ""
             if box and blocks:
-                hits = [b["text"] for b in blocks if box["x1"] <= b["center"][0] <= box["x2"] and box["y1"] <= b["center"][1] <= box["y2"]]
+                hits = [b["text"] for b in blocks if box["x1"] <= b["center"][0] <= box["x2"]
+                                                and box["y1"] <= b["center"][1] <= box["y2"]]
                 value = " ".join(hits)
                 match_count = len(hits)
             extracted[label] = value
@@ -145,7 +152,7 @@ if view_mode == "Tagging":
 
     st.session_state.extracted_values[form_num] = extracted
 
-# === 🔁 Resolution Navigator + Export
+# === 📊 Resolution Navigator + Export
 low_conf_forms = []
 dashboard_data = []
 
@@ -156,16 +163,16 @@ for fid in form_ids:
     for label in field_labels:
         box = layout.get(label)
         if box and blocks:
-            hits = [b for b in blocks if box["x1"] <= b["center"][0] <= box["x2"] and box["y1"] <= b["center"][1] <= box["y2"]]
+            hits = [b for b in blocks if box["x1"] <= b["center"][0] <= box["x2"]
+                                  and box["y1"] <= b["center"][1] <= box["y2"]]
             if hits:
                 matched += 1
     pct = round((matched / len(field_labels)) * 100, 1)
-    status = "✅ Resolved" if fid in st.session_state.resolved_forms else "❌ Pending"
+       status = "✅ Resolved" if fid in st.session_state.resolved_forms else "❌ Pending"
     if pct < 75 and fid not in st.session_state.resolved_forms:
         low_conf_forms.append(fid)
     dashboard_data.append({"Φόρμα": f"Φόρμα {fid}", "✅ Matched %": pct, "🔄 Status": status})
 
-resolved = len
 resolved = len(st.session_state.resolved_forms)
 remaining = len(low_conf_forms)
 total = resolved + remaining
@@ -175,7 +182,6 @@ st.sidebar.progress(resolved / total if total else 1.0)
 st.sidebar.write(f"✅ Resolved: {resolved} / {total}")
 
 queue = [fid for fid in low_conf_forms if fid not in st.session_state.resolved_forms]
-
 if queue:
     if st.button(f"🧭 Next Trouble Spot ({len(queue)} remaining)"):
         next_fid = queue[st.session_state.current_low_index % len(queue)]
