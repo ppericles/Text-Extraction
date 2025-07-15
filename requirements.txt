@@ -8,3 +8,4 @@ google-cloud-vision
 layoutparser[ocr]
 opencv-python-headless
 protobuf==3.20.3
+setuptools
