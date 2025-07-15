@@ -8,21 +8,23 @@ import cv2
 from google.cloud import vision
 from google.cloud.vision_v1 import types
 
-st.set_page_config(layout="wide", page_title="Greek Registry OCR")
-st.title("📜 Greek Registry Table OCR")
+st.set_page_config(layout="wide", page_title="Greek Registry Key-Value OCR")
+st.title("📜 Greek Registry Key-Value OCR")
 
 form_ids = [1, 2, 3]
 
-# === Session state
-for key, default in {
-    "extracted_values": {i: {} for i in form_ids}
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
+labels = [
+    "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟ", "ΚΥΡΙΟΝ ΟΝΟΜΑ", "ΟΝΟΜΑ ΠΑΤΡΟΣ",
+    "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
+]
 
-# === Sidebar
+# === Initialize session state
+if "extracted_values" not in st.session_state:
+    st.session_state.extracted_values = {}
+
+# === Sidebar Inputs
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
-uploaded_file = st.file_uploader("📎 Upload registry scan", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📎 Upload scanned registry", type=["jpg", "jpeg", "png"])
 
 if cred_file:
     with open("credentials.json", "wb") as f:
@@ -34,50 +36,43 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
 
-# === Modular functions
+# === Key-Value Cell OCR
+if uploaded_file and cred_file and st.button("🔍 Extract Key-Value Pairs from Forms"):
+    np_image = np.array(image)
+    height, width = np_image.shape[:2]
+    form_height = height // 3
+    left_half = width // 2
 
-def detect_cells(image, min_cell_width=40, min_cell_height=20, scale=15):
-    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    blur = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, binary = cv2.threshold(blur, 160, 255, cv2.THRESH_BINARY_INV)
-    binary = cv2.bitwise_not(binary)
+    client = vision.ImageAnnotatorClient()
 
-    horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (scale, 1))
-    vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, scale))
+    for form_id in form_ids:
+        y1 = (form_id - 1) * form_height
+        y2 = y1 + form_height
+        form_crop = np_image[y1:y2, :left_half]
+        st.subheader(f"📄 Φόρμα {form_id}")
 
-    horiz_lines = cv2.dilate(cv2.erode(binary, horiz_kernel, iterations=1), horiz_kernel, iterations=1)
-    vert_lines = cv2.dilate(cv2.erode(binary, vert_kernel, iterations=1), vert_kernel, iterations=1)
+        # Preprocessing
+        gray = cv2.cvtColor(form_crop, cv2.COLOR_RGB2GRAY)
+        _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
+        binary = cv2.bitwise_not(binary)
 
-    grid = cv2.bitwise_and(horiz_lines, vert_lines)
-    contours, _ = cv2.findContours(grid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        scale = 20
+        horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (scale, 1))
+        vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, scale))
 
-    boxes = [cv2.boundingRect(c) for c in contours if cv2.boundingRect(c)[2] > min_cell_width and cv2.boundingRect(c)[3] > min_cell_height]
-    boxes = sorted(boxes, key=lambda b: (b[1], b[0]))  # top-down, left-right
-    return boxes
+        horiz_lines = cv2.dilate(cv2.erode(binary, horiz_kernel, iterations=1), horiz_kernel, iterations=1)
+        vert_lines = cv2.dilate(cv2.erode(binary, vert_kernel, iterations=1), vert_kernel, iterations=1)
 
-def organize_cells_into_grid(cell_boxes, tolerance=10):
-    rows = []
-    for box in cell_boxes:
-        x, y, w, h = box
-        inserted = False
-        for row in rows:
-            if abs(row[0][1] - y) <= tolerance:
-                row.append(box)
-                inserted = True
+        grid = cv2.bitwise_and(horiz_lines, vert_lines)
+        contours, _ = cv2.findContours(grid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        boxes = [cv2.boundingRect(c) for c in contours if cv2.boundingRect(c)[2] > 40 and cv2.boundingRect(c)[3] > 20]
+        boxes = sorted(boxes, key=lambda b: (round(b[1] / 10), b[0]))[:8]
+
+        form_data = {}
+
+        for i, (x, y, w, h) in enumerate(boxes):
+            if i >= len(labels):
                 break
-        if not inserted:
-            rows.append([box])
-    for row in rows:
-        row.sort(key=lambda b: b[0])
-    return rows
-
-def process_form_table(form_crop, client, form_id):
-    boxes = detect_cells(form_crop)
-    grid = organize_cells_into_grid(boxes)
-    result = {}
-
-    for r, row in enumerate(grid):
-        for c, (x, y, w, h) in enumerate(row):
             cell_crop = form_crop[y:y+h, x:x+w]
             pil_img = Image.fromarray(cell_crop)
             buffer = BytesIO()
@@ -85,41 +80,18 @@ def process_form_table(form_crop, client, form_id):
             vision_img = types.Image(content=buffer.getvalue())
             response = client.document_text_detection(image=vision_img)
             text = response.full_text_annotation.text.strip()
-            result[(r, c)] = text
-    return result
+            lines = text.split("\n")
 
-# === Main processing
-if uploaded_file and cred_file and st.button("📊 Run Table OCR for All 3 Forms"):
-    np_image = np.array(image)
-    height = np_image.shape[0]
-    form_height = height // 3
-    client = vision.ImageAnnotatorClient()
+            key = labels[i]
+            value = " ".join(lines[1:]).strip() if len(lines) >= 2 else lines[0]
+            form_data[key] = value
 
-    for form_id in form_ids:
-        y1 = (form_id - 1) * form_height
-        y2 = y1 + form_height
-        form_crop = np_image[y1:y2, :]
-        form_data = process_form_table(form_crop, client, form_id)
-        st.session_state.extracted_values[form_id] = form_data
+            st.image(cell_crop, caption=f"📎 {key}: {value}", width=400)
 
-        st.subheader(f"📄 Φόρμα {form_id}")
-        for (r, c), text in form_data.items():
-            st.write(f"🔹 Row {r+1}, Col {c+1}: {text}")
+        st.session_state.extracted_values[str(form_id)] = form_data
 
-def sanitize_extracted_values(data):
-    clean = {}
-    for form_id, cells in data.items():
-        form_str = str(form_id)
-        clean[form_str] = {}
-        for key, value in cells.items():
-            key_str = str(key)
-            val_str = str(value)
-            clean[form_str][key_str] = val_str
-    return clean
-
-# === 💾 Export Structured Data
+# === Export Results
 if st.session_state.extracted_values:
-    st.markdown("## 💾 Export Structured Data")
-    clean_data = sanitize_extracted_values(st.session_state.extracted_values)
-    export_json = json.dumps(clean_data, indent=2, ensure_ascii=False)
-    st.download_button("💾 Export as JSON", data=export_json, file_name="form_data.json", mime="application/json")
+    st.markdown("## 💾 Export Structured Form Data")
+    export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
+    st.download_button("💾 Export as JSON", data=export_json, file_name="registry_data.json", mime="application/json")
