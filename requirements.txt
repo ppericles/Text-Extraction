@@ -7,3 +7,4 @@ unidecode
 streamlit-image-coordinates==0.1.2
 layoutparser[layoutmodels,ocr]
 opencv-python-headless
+protobuf==3.20.3
