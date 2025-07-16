@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import cv2
 from google.cloud import vision
-from google.cloud.vision_v1 import types
 
 st.set_page_config(layout="wide", page_title="Greek Registry Grid Extractor")
 st.title("📜 Greek Registry Key-Value Grid Parser")
@@ -36,54 +35,52 @@ if uploaded_file:
 
 if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
     np_image = np.array(image)
-    height, width = np_image.shape[:2]
-    form_height = height // 3
-    left_width = width // 2
+    h, w = np_image.shape[:2]
+    form_h = h // 3
+    left_w = w // 2
     pad = 5
-
     client = vision.ImageAnnotatorClient()
 
     for form_id in form_ids:
-        y1, y2 = (form_id - 1) * form_height, form_id * form_height
-        form_crop_np = np_image[y1:y2, :left_width].copy()
-        form_crop = Image.fromarray(form_crop_np).convert("RGB")
-        draw = ImageDraw.Draw(form_crop)
+        y1, y2 = (form_id - 1) * form_h, form_id * form_h
+        crop_np = np_image[y1:y2, :left_w].copy()
+        preview_img = Image.fromarray(crop_np).convert("RGB")
+        draw = ImageDraw.Draw(preview_img)
 
-        gray = cv2.cvtColor(np.array(form_crop), cv2.COLOR_RGB2GRAY)
+        gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
         _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
-        binary = cv2.bitwise_not(binary)
 
         scale = 20
-        horiz = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1))), cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1)))
-        vert  = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale))), cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale)))
+        horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1))
+        vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale))
+        horiz_lines = cv2.dilate(cv2.erode(binary, horiz_kernel), horiz_kernel)
+        vert_lines = cv2.dilate(cv2.erode(binary, vert_kernel), vert_kernel)
 
-        lines_y = cv2.reduce(horiz, 1, cv2.REDUCE_MAX).reshape(-1)
-        y_coords = [i for i in range(len(lines_y)) if lines_y[i] < 255]
-        y_clusters = [y_coords[i] for i in range(0, len(y_coords), max(1, len(y_coords)//3))][:3]
+        horiz_coords = np.where(np.sum(horiz_lines, axis=1) < horiz_lines.shape[1]*255)[0]
+        vert_coords = np.where(np.sum(vert_lines, axis=0) < vert_lines.shape[0]*255)[0]
 
-        lines_x = cv2.reduce(vert, 0, cv2.REDUCE_MAX).reshape(-1)
-        x_coords = [i for i in range(len(lines_x)) if lines_x[i] < 255]
-        x_clusters = [x_coords[i] for i in range(0, len(x_coords), max(1, len(x_coords)//5))][:5]
+        rows = [horiz_coords[i] for i in range(0, len(horiz_coords), max(1, len(horiz_coords)//3))][:3]
+        cols = [vert_coords[i] for i in range(0, len(vert_coords), max(1, len(vert_coords)//5))][:5]
 
         form_data = {}
-
         st.subheader(f"📄 Φόρμα {form_id}")
+
         for r in range(2):
             for c in range(4):
                 field = labels_matrix[r][c]
                 try:
-                    y_start = max(0, y_clusters[r] - pad)
-                    y_end   = min(form_crop.height, y_clusters[r+1] + pad if r+1 < len(y_clusters) else form_crop.height)
-                    x_start = max(0, x_clusters[c] - pad)
-                    x_end   = min(form_crop.width, x_clusters[c+1] + pad if c+1 < len(x_clusters) else form_crop.width)
+                    y_start = max(0, rows[r] - pad)
+                    y_end = rows[r+1] + pad if r+1 < len(rows) else crop_np.shape[0]
+                    x_start = max(0, cols[c] - pad)
+                    x_end = cols[c+1] + pad if c+1 < len(cols) else crop_np.shape[1]
+                    cell = crop_np[y_start:y_end, x_start:x_end]
 
-                    cell_crop = form_crop.crop((x_start, y_start, x_end, y_end))
                     buffer = BytesIO()
-                    cell_crop.save(buffer, format="JPEG")
-                    vision_img = types.Image(content=buffer.getvalue())
-                    response = client.document_text_detection(image=vision_img)
-                    raw_text = response.full_text_annotation.text.strip()
-                    value = " ".join(raw_text.split("\n")).strip()
+                    Image.fromarray(cell).save(buffer, format="JPEG")
+                    buffer.seek(0)
+                    response = client.document_text_detection(image=vision.Image(content=buffer.getvalue()))
+                    text = response.full_text_annotation.text.strip()
+                    value = " ".join(text.split("\n")).strip()
                     form_data[field] = value
 
                     draw.rectangle([(x_start, y_start), (x_end, y_end)], outline="red", width=2)
@@ -91,15 +88,12 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
                 except:
                     form_data[field] = "—"
 
-        # Add test overlay to confirm drawing
-        draw.rectangle([(10, 10), (210, 60)], outline="green", width=3)
-        draw.text((12, 12), "TEST BOX", fill="purple")
-
+        # Save and reload image with annotations
         preview_buffer = BytesIO()
-        form_crop.save(preview_buffer, format="PNG")
+        preview_img.save(preview_buffer, format="PNG")
         preview_buffer.seek(0)
-        annotated_img = Image.open(preview_buffer)
-        st.image(np.array(annotated_img), caption=f"🖼️ Φόρμα {form_id} with Boxes & Labels", use_column_width=True)
+        preview_np = np.array(Image.open(preview_buffer))
+        st.image(preview_np, caption=f"🖼️ Φόρμα {form_id} with Boxes & Labels", use_column_width=True)
 
         st.session_state.extracted_values[str(form_id)] = form_data
 
@@ -109,7 +103,6 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
             corrected = st.text_input(f"{field}", value=val, key=f"{form_id}_{field}")
             st.session_state.extracted_values[str(form_id)][field] = corrected
 
-# === Export
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Final Data")
     export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
