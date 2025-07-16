@@ -35,65 +35,81 @@ if uploaded_file:
 
 if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
     np_image = np.array(image)
-    h, w = np_image.shape[:2]
-    form_h = h // 3
-    left_w = w // 2
+    height, width = np_image.shape[:2]
+    form_height = height // 3
+    left_width = width // 2
     pad = 5
     client = vision.ImageAnnotatorClient()
 
     for form_id in form_ids:
-        y1, y2 = (form_id - 1) * form_h, form_id * form_h
-        crop_np = np_image[y1:y2, :left_w].copy()
-        preview_img = Image.fromarray(crop_np).convert("RGB")
+        y1 = (form_id - 1) * form_height
+        y2 = y1 + form_height
+        form_crop_np = np_image[y1:y2, :left_width].copy()
+        preview_img = Image.fromarray(form_crop_np).convert("RGB")
         draw = ImageDraw.Draw(preview_img)
 
-        gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
+        gray = cv2.cvtColor(form_crop_np, cv2.COLOR_RGB2GRAY)
         _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
+        binary = cv2.bitwise_not(binary)
 
+        # Morphological line detection
         scale = 20
-        horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1))
-        vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale))
-        horiz_lines = cv2.dilate(cv2.erode(binary, horiz_kernel), horiz_kernel)
-        vert_lines = cv2.dilate(cv2.erode(binary, vert_kernel), vert_kernel)
+        horizontal = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (scale, 1))), cv2.getStructuringElement(cv2.MORPH_RECT, (scale, 1)))
+        vertical = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (1, scale))), cv2.getStructuringElement(cv2.MORPH_RECT, (1, scale)))
+        grid_mask = cv2.bitwise_and(horizontal, vertical)
 
-        horiz_coords = np.where(np.sum(horiz_lines, axis=1) < horiz_lines.shape[1]*255)[0]
-        vert_coords = np.where(np.sum(vert_lines, axis=0) < vert_lines.shape[0]*255)[0]
+        contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        boxes = [cv2.boundingRect(c) for c in contours if cv2.boundingRect(c)[2] > 40 and cv2.boundingRect(c)[3] > 20]
 
-        rows = [horiz_coords[i] for i in range(0, len(horiz_coords), max(1, len(horiz_coords)//3))][:3]
-        cols = [vert_coords[i] for i in range(0, len(vert_coords), max(1, len(vert_coords)//5))][:5]
+        # Cluster into grid
+        def cluster_boxes(boxes, row_tol=15, col_tol=15):
+            rows = []
+            for box in sorted(boxes, key=lambda b: b[1]):
+                x, y, w, h = box
+                inserted = False
+                for r in rows:
+                    if abs(r[0][1] - y) <= row_tol:
+                        r.append(box)
+                        inserted = True
+                        break
+                if not inserted:
+                    rows.append([box])
+            for r in rows:
+                r.sort(key=lambda b: b[0])  # sort left to right
+            return rows
+
+        clustered = cluster_boxes(boxes)
 
         form_data = {}
         st.subheader(f"📄 Φόρμα {form_id}")
+        for row_idx, row in enumerate(clustered[:2]):
+            for col_idx, box in enumerate(row[:4]):
+                if row_idx >= len(labels_matrix) or col_idx >= len(labels_matrix[row_idx]):
+                    continue
+                x, y, w, h = box
+                x_start, y_start = max(0, x - pad), max(0, y - pad)
+                x_end, y_end = x + w + pad, y + h + pad
 
-        for r in range(2):
-            for c in range(4):
-                field = labels_matrix[r][c]
-                try:
-                    y_start = max(0, rows[r] - pad)
-                    y_end = rows[r+1] + pad if r+1 < len(rows) else crop_np.shape[0]
-                    x_start = max(0, cols[c] - pad)
-                    x_end = cols[c+1] + pad if c+1 < len(cols) else crop_np.shape[1]
-                    cell = crop_np[y_start:y_end, x_start:x_end]
+                cell_np = form_crop_np[y_start:y_end, x_start:x_end]
+                buffer = BytesIO()
+                Image.fromarray(cell_np).save(buffer, format="JPEG")
+                buffer.seek(0)
 
-                    buffer = BytesIO()
-                    Image.fromarray(cell).save(buffer, format="JPEG")
-                    buffer.seek(0)
-                    response = client.document_text_detection(image=vision.Image(content=buffer.getvalue()))
-                    text = response.full_text_annotation.text.strip()
-                    value = " ".join(text.split("\n")).strip()
-                    form_data[field] = value
+                response = client.document_text_detection(image=vision.Image(content=buffer.getvalue()))
+                text = response.full_text_annotation.text.strip()
+                value = " ".join(text.split("\n")).strip()
+                field = labels_matrix[row_idx][col_idx]
+                form_data[field] = value
 
-                    draw.rectangle([(x_start, y_start), (x_end, y_end)], outline="red", width=2)
-                    draw.text((x_start + 5, y_start + 5), field, fill="blue")
-                except:
-                    form_data[field] = "—"
+                draw.rectangle([(x_start, y_start), (x_end, y_end)], outline="red", width=2)
+                draw.text((x_start + 5, y_start + 5), field, fill="blue")
 
-        # Save and reload image with annotations
-        preview_buffer = BytesIO()
-        preview_img.save(preview_buffer, format="PNG")
-        preview_buffer.seek(0)
-        preview_np = np.array(Image.open(preview_buffer))
-        st.image(preview_np, caption=f"🖼️ Φόρμα {form_id} with Boxes & Labels", use_column_width=True)
+        # Final image for display
+        buffer = BytesIO()
+        preview_img.save(buffer, format="PNG")
+        buffer.seek(0)
+        annotated = Image.open(buffer)
+        st.image(np.array(annotated), caption=f"🖼️ Φόρμα {form_id} with Boxes & Labels", use_column_width=True)
 
         st.session_state.extracted_values[str(form_id)] = form_data
 
@@ -103,6 +119,7 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
             corrected = st.text_input(f"{field}", value=val, key=f"{form_id}_{field}")
             st.session_state.extracted_values[str(form_id)][field] = corrected
 
+# === Export
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Final Data")
     export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
