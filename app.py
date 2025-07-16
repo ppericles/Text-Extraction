@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import json
 import os
 from io import BytesIO
@@ -9,7 +9,7 @@ import cv2
 from google.cloud import vision
 from google.cloud.vision_v1 import types
 
-st.set_page_config(layout="wide", page_title="Greek Registry Key-Value Parser")
+st.set_page_config(layout="wide", page_title="Greek Registry Grid Extractor")
 st.title("📜 Greek Registry Key-Value Grid Parser")
 
 form_ids = [1, 2, 3]
@@ -18,13 +18,11 @@ labels_matrix = [
     ["ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"]
 ]
 
-# === Session State
 if "extracted_values" not in st.session_state:
     st.session_state.extracted_values = {}
 
-# === Sidebar Inputs
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
-uploaded_file = st.file_uploader("📎 Upload scanned registry", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📎 Upload registry scan", type=["jpg", "jpeg", "png"])
 
 if cred_file:
     with open("credentials.json", "wb") as f:
@@ -36,20 +34,21 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
 
-# === Main Extraction
-if uploaded_file and cred_file and st.button("🔍 Parse and Review Forms"):
+# === Main logic
+if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
     np_image = np.array(image)
-    h, w = np_image.shape[:2]
-    form_h = h // 3
-    left_w = w // 2
-    pad = 5  # padding around each cell
+    height, width = np_image.shape[:2]
+    form_height = height // 3
+    left_width = width // 2
+    pad = 5
 
     client = vision.ImageAnnotatorClient()
-    for form_id in form_ids:
-        y1, y2 = (form_id - 1) * form_h, form_id * form_h
-        form_crop = np_image[y1:y2, :left_w].copy()
 
-        # Grid detection
+    for form_id in form_ids:
+        y1, y2 = (form_id - 1) * form_height, form_id * form_height
+        form_crop = np_image[y1:y2, :left_width].copy()
+
+        # Line detection
         gray = cv2.cvtColor(form_crop, cv2.COLOR_RGB2GRAY)
         _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
         binary = cv2.bitwise_not(binary)
@@ -66,11 +65,11 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Review Forms"):
         x_coords = [i for i in range(len(lines_x)) if lines_x[i] < 255]
         x_clusters = [x_coords[i] for i in range(0, len(x_coords), max(1, len(x_coords)//5))][:5]
 
+        form_data = {}
         preview = Image.fromarray(form_crop)
         draw = ImageDraw.Draw(preview)
-        form_data = {}
-        st.subheader(f"📄 Φόρμα {form_id}")
 
+        st.subheader(f"📄 Φόρμα {form_id}")
         for r in range(2):
             for c in range(4):
                 try:
@@ -91,23 +90,25 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Review Forms"):
                     form_data[field] = value
 
                     draw.rectangle([(x_start, y_start), (x_end, y_end)], outline="red", width=2)
-                    draw.text((x_start + 5, y_start + 5), field, fill="blue")
+                    draw.text((x_start + 5, y_start + 5), f"{field}: {value}", fill="blue")
                 except:
                     form_data[field] = "—"
+                    draw.rectangle([(x_start, y_start), (x_end, y_end)], outline="red", width=2)
+                    draw.text((x_start + 5, y_start + 5), f"{field}: —", fill="blue")
 
         st.session_state.extracted_values[str(form_id)] = form_data
-        st.image(preview, caption=f"🧾 Bounding Box Preview — Φόρμα {form_id}", use_column_width=True)
+        st.image(preview, caption=f"🔍 Bounding Boxes with Labels — Φόρμα {form_id}", use_column_width=True)
 
-        # Editable review panel
-        st.markdown(f"### ✏️ Review Φόρμα {form_id}")
+        # Review editor
+        st.markdown(f"### ✏️ Review and Edit Φόρμα {form_id}")
         for field in labels_matrix[0] + labels_matrix[1]:
             current_val = form_data.get(field, "")
             new_val = st.text_input(f"{field}", value=current_val, key=f"{form_id}_{field}")
             st.session_state.extracted_values[str(form_id)][field] = new_val
 
-# === Export Section
+# === Export tools
 if st.session_state.extracted_values:
-    st.markdown("## 💾 Export Data")
+    st.markdown("## 💾 Export Clean Data")
     # JSON
     export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
     st.download_button("💾 Download JSON", data=export_json, file_name="registry_data.json", mime="application/json")
