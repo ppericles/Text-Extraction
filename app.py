@@ -1,6 +1,6 @@
 import streamlit as st
 from PIL import Image, ImageDraw
-import os, json
+import json, os
 from io import BytesIO
 import numpy as np
 import pandas as pd
@@ -17,11 +17,22 @@ labels_matrix = [
     ["ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"]
 ]
 
+# === Session Setup ===
+if "contour_boxes" not in st.session_state:
+    st.session_state.contour_boxes = {}
+if "selected_boxes" not in st.session_state:
+    st.session_state.selected_boxes = {}
 if "extracted_values" not in st.session_state:
     st.session_state.extracted_values = {}
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
 uploaded_file = st.file_uploader("📎 Upload registry page", type=["jpg", "jpeg", "png"])
+refresh = st.sidebar.button("🔄 Reset Selection")
+
+if refresh:
+    st.session_state.contour_boxes = {}
+    st.session_state.selected_boxes = {}
+    st.session_state.extracted_values = {}
 
 if cred_file:
     with open("credentials.json", "wb") as f:
@@ -33,7 +44,7 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
 
-if uploaded_file and cred_file and st.button("🔍 Review and Parse"):
+if uploaded_file and cred_file:
     np_image = np.array(image)
     height, width = np_image.shape[:2]
     form_height = height // 3
@@ -48,35 +59,44 @@ if uploaded_file and cred_file and st.button("🔍 Review and Parse"):
         preview_img = Image.fromarray(crop_np).convert("RGB")
         draw = ImageDraw.Draw(preview_img)
 
-        gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
-        _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
-        binary = cv2.bitwise_not(binary)
+        if str(form_id) not in st.session_state.contour_boxes:
+            # First run: detect boxes
+            gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
+            _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
+            binary = cv2.bitwise_not(binary)
+            scale = 20
+            horizontal = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1))), cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1)))
+            vertical = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale))), cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale)))
+            grid_mask = cv2.bitwise_and(horizontal, vertical)
 
-        scale = 20
-        horizontal = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1))), cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1)))
-        vertical = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale))), cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale)))
-        grid_mask = cv2.bitwise_and(horizontal, vertical)
+            contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            max_w, max_h = crop_np.shape[1], crop_np.shape[0]
+            kept_boxes = []
+            for c in contours:
+                x, y, w, h = cv2.boundingRect(c)
+                if w > 40 and h > 20 and w < max_w * 0.9 and h < max_h * 0.9:
+                    kept_boxes.append((x, y, w, h))
+            kept_boxes.sort(key=lambda b: (b[1], b[0]))
+            st.session_state.contour_boxes[str(form_id)] = kept_boxes
 
-        contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        max_w, max_h = crop_np.shape[1], crop_np.shape[0]
-        kept_boxes = []
-        selections = []
+        kept_boxes = st.session_state.contour_boxes[str(form_id)]
 
-        for idx, c in enumerate(contours):
-            x, y, w, h = cv2.boundingRect(c)
-            if w > 40 and h > 20 and w < max_w * 0.9 and h < max_h * 0.9:
-                kept_boxes.append((x, y, w, h))
-                label = f"Include Box {idx+1} → x={x}, y={y}, w={w}, h={h}"
-                selected = st.checkbox(label, value=False, key=f"box_{form_id}_{idx}")
-                selections.append((selected, (x, y, w, h)))
-                draw.rectangle([(x, y), (x + w, y + h)], outline="purple", width=2)
-                draw.text((x + 4, y + 4), f"{idx+1}", fill="purple")
+        selected = []
+        for idx, box in enumerate(kept_boxes):
+            x, y, w, h = box
+            cb_label = f"Box {idx+1} → x={x}, y={y}, w={w}, h={h}"
+            checked = st.checkbox(cb_label, key=f"cb_{form_id}_{idx}")
+            if checked:
+                selected.append(box)
+            draw.rectangle([(x, y), (x + w, y + h)], outline="purple", width=2)
+            draw.text((x + 4, y + 4), f"{idx+1}", fill="purple")
 
+        st.session_state.selected_boxes[str(form_id)] = selected
         form_data = {}
         field_idx = 0
 
-        for selected, box in selections:
-            if not selected or field_idx >= 8:
+        for box in selected:
+            if field_idx >= 8:
                 continue
             x, y, w, h = box
             x1 = max(0, x - pad)
@@ -99,13 +119,13 @@ if uploaded_file and cred_file and st.button("🔍 Review and Parse"):
             draw.text((x1 + 4, y1 + 4), field, fill="blue")
             field_idx += 1
 
+        st.session_state.extracted_values[str(form_id)] = form_data
+
         buffer = BytesIO()
         preview_img.save(buffer, format="PNG")
         buffer.seek(0)
         annotated = Image.open(buffer)
         st.image(np.array(annotated), caption=f"🖼️ Φόρμα {form_id} — Final Grid", use_column_width=True)
-
-        st.session_state.extracted_values[str(form_id)] = form_data
 
         st.markdown(f"### ✏️ Review Φόρμα {form_id}")
         for field in labels_matrix[0] + labels_matrix[1]:
