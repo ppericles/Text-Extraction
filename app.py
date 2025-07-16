@@ -8,8 +8,8 @@ import cv2
 from google.cloud import vision
 from google.cloud.vision_v1 import types
 
-st.set_page_config(layout="wide", page_title="Greek Registry Grid Debugger")
-st.title("📜 Greek Registry Layout + OCR Parser")
+st.set_page_config(layout="wide", page_title="Greek Registry Contour Reviewer")
+st.title("📜 Greek Registry Layout + OCR with Manual Cell Selection")
 
 form_ids = [1, 2, 3]
 labels_matrix = [
@@ -33,7 +33,7 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
 
-if uploaded_file and cred_file and st.button("🔍 Parse Forms + Review Contours"):
+if uploaded_file and cred_file and st.button("🔍 Review and Parse"):
     np_image = np.array(image)
     height, width = np_image.shape[:2]
     form_height = height // 3
@@ -42,6 +42,7 @@ if uploaded_file and cred_file and st.button("🔍 Parse Forms + Review Contours
     client = vision.ImageAnnotatorClient()
 
     for form_id in form_ids:
+        st.subheader(f"📄 Φόρμα {form_id}")
         y1, y2 = (form_id - 1) * form_height, form_id * form_height
         crop_np = np_image[y1:y2, :left_width].copy()
         preview_img = Image.fromarray(crop_np).convert("RGB")
@@ -58,67 +59,51 @@ if uploaded_file and cred_file and st.button("🔍 Parse Forms + Review Contours
 
         contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         max_w, max_h = crop_np.shape[1], crop_np.shape[0]
-        all_boxes = []
-        st.subheader(f"🧩 Contour Reviewer — Φόρμα {form_id}")
+        kept_boxes = []
+        selections = []
 
         for idx, c in enumerate(contours):
             x, y, w, h = cv2.boundingRect(c)
             if w > 40 and h > 20 and w < max_w * 0.9 and h < max_h * 0.9:
-                all_boxes.append((x, y, w, h))
+                kept_boxes.append((x, y, w, h))
+                label = f"Include Box {idx+1} → x={x}, y={y}, w={w}, h={h}"
+                selected = st.checkbox(label, value=False, key=f"box_{form_id}_{idx}")
+                selections.append((selected, (x, y, w, h)))
                 draw.rectangle([(x, y), (x + w, y + h)], outline="orange", width=2)
-                draw.text((x + 4, y + 4), f"Box {idx+1}", fill="orange")
-                st.text(f"Box {idx+1} → x={x}, y={y}, w={w}, h={h}")
+                draw.text((x + 4, y + 4), f"{idx+1}", fill="orange")
 
-        st.markdown(f"**🧮 Cell-sized boxes kept: {len(all_boxes)}**")
-
-        # Cluster by rows
-        def cluster(boxes, row_tol=15):
-            rows = []
-            for b in sorted(boxes, key=lambda b: b[1]):
-                inserted = False
-                for r in rows:
-                    if abs(r[0][1] - b[1]) <= row_tol:
-                        r.append(b)
-                        inserted = True
-                        break
-                if not inserted:
-                    rows.append([b])
-            for r in rows:
-                r.sort(key=lambda b: b[0])
-            return rows
-
-        clustered = cluster(all_boxes)
         form_data = {}
+        field_idx = 0
 
-        for row_idx, row in enumerate(clustered[:2]):
-            for col_idx, box in enumerate(row[:4]):
-                if row_idx >= 2 or col_idx >= 4:
-                    continue
-                x, y, w, h = box
-                x1 = max(0, x - pad)
-                y1 = max(0, y - pad)
-                x2 = x + w + pad
-                y2 = y + h + pad
-                field = labels_matrix[row_idx][col_idx]
-
-                cell = crop_np[y1:y2, x1:x2]
-                buffer = BytesIO()
-                Image.fromarray(cell).save(buffer, format="JPEG")
-                buffer.seek(0)
-                vision_img = types.Image(content=buffer.getvalue())
-                response = client.document_text_detection(image=vision_img)
-                text = response.full_text_annotation.text.strip()
-                value = " ".join(text.split("\n")).strip()
-                form_data[field] = value
-
-                draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
-                draw.text((x1 + 4, y1 + 4), field, fill="blue")
+        for selected, box in selections:
+            if not selected or field_idx >= 8:
+                continue
+            x, y, w, h = box
+            x1 = max(0, x - pad)
+            y1 = max(0, y - pad)
+            x2 = x + w + pad
+            y2 = y + h + pad
+            cell = crop_np[y1:y2, x1:x2]
+            buffer = BytesIO()
+            Image.fromarray(cell).save(buffer, format="JPEG")
+            buffer.seek(0)
+            vision_img = types.Image(content=buffer.getvalue())
+            response = client.document_text_detection(image=vision_img)
+            text = response.full_text_annotation.text.strip()
+            value = " ".join(text.split("\n")).strip()
+            row = field_idx // 4
+            col = field_idx % 4
+            field = labels_matrix[row][col]
+            form_data[field] = value
+            draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
+            draw.text((x1 + 4, y1 + 4), field, fill="blue")
+            field_idx += 1
 
         buffer = BytesIO()
         preview_img.save(buffer, format="PNG")
         buffer.seek(0)
         annotated = Image.open(buffer)
-        st.image(np.array(annotated), caption=f"🖼️ Φόρμα {form_id} — Annotated Grid", use_column_width=True)
+        st.image(np.array(annotated), caption=f"🖼️ Φόρμα {form_id} — Final Grid", use_column_width=True)
 
         st.session_state.extracted_values[str(form_id)] = form_data
 
