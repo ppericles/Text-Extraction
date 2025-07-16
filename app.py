@@ -33,7 +33,7 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
 
-if uploaded_file and cred_file and st.button("🔍 Parse Forms and Debug Layout"):
+if uploaded_file and cred_file and st.button("🔍 Parse Forms + Review Contours"):
     np_image = np.array(image)
     height, width = np_image.shape[:2]
     form_height = height // 3
@@ -59,14 +59,19 @@ if uploaded_file and cred_file and st.button("🔍 Parse Forms and Debug Layout"
         contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         max_w, max_h = crop_np.shape[1], crop_np.shape[0]
         all_boxes = []
-        for c in contours:
+        st.subheader(f"🧩 Contour Reviewer — Φόρμα {form_id}")
+
+        for idx, c in enumerate(contours):
             x, y, w, h = cv2.boundingRect(c)
-            area = w * h
             if w > 40 and h > 20 and w < max_w * 0.9 and h < max_h * 0.9:
                 all_boxes.append((x, y, w, h))
+                draw.rectangle([(x, y), (x + w, y + h)], outline="orange", width=2)
+                draw.text((x + 4, y + 4), f"Box {idx+1}", fill="orange")
+                st.text(f"Box {idx+1} → x={x}, y={y}, w={w}, h={h}")
+
         st.markdown(f"**🧮 Cell-sized boxes kept: {len(all_boxes)}**")
 
-        # Cluster by row
+        # Cluster by rows
         def cluster(boxes, row_tol=15):
             rows = []
             for b in sorted(boxes, key=lambda b: b[1]):
@@ -85,7 +90,6 @@ if uploaded_file and cred_file and st.button("🔍 Parse Forms and Debug Layout"
         clustered = cluster(all_boxes)
         form_data = {}
 
-        st.subheader(f"📄 Φόρμα {form_id}")
         for row_idx, row in enumerate(clustered[:2]):
             for col_idx, box in enumerate(row[:4]):
                 if row_idx >= 2 or col_idx >= 4:
@@ -114,7 +118,7 @@ if uploaded_file and cred_file and st.button("🔍 Parse Forms and Debug Layout"
         preview_img.save(buffer, format="PNG")
         buffer.seek(0)
         annotated = Image.open(buffer)
-        st.image(np.array(annotated), caption=f"🖼️ Φόρμα {form_id} — Clean Grid Preview", use_column_width=True)
+        st.image(np.array(annotated), caption=f"🖼️ Φόρμα {form_id} — Annotated Grid", use_column_width=True)
 
         st.session_state.extracted_values[str(form_id)] = form_data
 
