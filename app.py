@@ -1,7 +1,6 @@
 import streamlit as st
 from PIL import Image, ImageDraw
-import json
-import os
+import json, os
 from io import BytesIO
 import numpy as np
 import pandas as pd
@@ -43,8 +42,7 @@ if uploaded_file and cred_file and st.button("🔍 Parse Forms and Debug Layout"
     client = vision.ImageAnnotatorClient()
 
     for form_id in form_ids:
-        y1 = (form_id - 1) * form_height
-        y2 = y1 + form_height
+        y1, y2 = (form_id - 1) * form_height, form_id * form_height
         crop_np = np_image[y1:y2, :left_width].copy()
         preview_img = Image.fromarray(crop_np).convert("RGB")
         draw = ImageDraw.Draw(preview_img)
@@ -58,73 +56,65 @@ if uploaded_file and cred_file and st.button("🔍 Parse Forms and Debug Layout"
         vertical = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale))), cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale)))
         grid_mask = cv2.bitwise_and(horizontal, vertical)
 
-        st.subheader(f"🧩 Grid Mask Visualization — Φόρμα {form_id}")
-        st.image(grid_mask, caption="Grid Mask (AND of horizontal + vertical lines)", use_column_width=True)
-
         contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        boxes = [cv2.boundingRect(c) for c in contours if cv2.boundingRect(c)[2] > 40 and cv2.boundingRect(c)[3] > 20]
+        max_w, max_h = crop_np.shape[1], crop_np.shape[0]
+        all_boxes = []
+        for c in contours:
+            x, y, w, h = cv2.boundingRect(c)
+            area = w * h
+            if w > 40 and h > 20 and w < max_w * 0.9 and h < max_h * 0.9:
+                all_boxes.append((x, y, w, h))
+        st.markdown(f"**🧮 Cell-sized boxes kept: {len(all_boxes)}**")
 
-        st.markdown(f"**🧮 Contours found: {len(boxes)}**")
+        # Cluster by row
+        def cluster(boxes, row_tol=15):
+            rows = []
+            for b in sorted(boxes, key=lambda b: b[1]):
+                inserted = False
+                for r in rows:
+                    if abs(r[0][1] - b[1]) <= row_tol:
+                        r.append(b)
+                        inserted = True
+                        break
+                if not inserted:
+                    rows.append([b])
+            for r in rows:
+                r.sort(key=lambda b: b[0])
+            return rows
+
+        clustered = cluster(all_boxes)
         form_data = {}
 
-        if len(boxes) >= 8:
-            def cluster_boxes(boxes, row_tol=15):
-                rows = []
-                for box in sorted(boxes, key=lambda b: b[1]):
-                    x, y, w, h = box
-                    added = False
-                    for r in rows:
-                        if abs(r[0][1] - y) <= row_tol:
-                            r.append(box)
-                            added = True
-                            break
-                    if not added:
-                        rows.append([box])
-                for r in rows:
-                    r.sort(key=lambda b: b[0])
-                return rows
+        st.subheader(f"📄 Φόρμα {form_id}")
+        for row_idx, row in enumerate(clustered[:2]):
+            for col_idx, box in enumerate(row[:4]):
+                if row_idx >= 2 or col_idx >= 4:
+                    continue
+                x, y, w, h = box
+                x1 = max(0, x - pad)
+                y1 = max(0, y - pad)
+                x2 = x + w + pad
+                y2 = y + h + pad
+                field = labels_matrix[row_idx][col_idx]
 
-            clustered = cluster_boxes(boxes)
+                cell = crop_np[y1:y2, x1:x2]
+                buffer = BytesIO()
+                Image.fromarray(cell).save(buffer, format="JPEG")
+                buffer.seek(0)
+                vision_img = types.Image(content=buffer.getvalue())
+                response = client.document_text_detection(image=vision_img)
+                text = response.full_text_annotation.text.strip()
+                value = " ".join(text.split("\n")).strip()
+                form_data[field] = value
 
-            for row_idx, row in enumerate(clustered[:2]):
-                for col_idx, box in enumerate(row[:4]):
-                    if row_idx >= 2 or col_idx >= 4:
-                        continue
-                    x, y, w, h = box
-                    x1, y1 = max(0, x - pad), max(0, y - pad)
-                    x2, y2 = x + w + pad, y + h + pad
-                    cell = crop_np[y1:y2, x1:x2]
-                    buffer = BytesIO()
-                    Image.fromarray(cell).save(buffer, format="JPEG")
-                    buffer.seek(0)
-                    vision_img = types.Image(content=buffer.getvalue())
-                    response = client.document_text_detection(image=vision_img)
-                    text = response.full_text_annotation.text.strip()
-                    value = " ".join(text.split("\n")).strip()
-                    field = labels_matrix[row_idx][col_idx]
-                    form_data[field] = value
-                    draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
-                    draw.text((x1 + 5, y1 + 5), field, fill="blue")
-        else:
-            # Draw fallback boxes
-            cell_w = crop_np.shape[1] // 4
-            cell_h = crop_np.shape[0] // 2
-            for r in range(2):
-                for c in range(4):
-                    x1 = c * cell_w + pad
-                    y1 = r * cell_h + pad
-                    x2 = (c + 1) * cell_w - pad
-                    y2 = (r + 1) * cell_h - pad
-                    field = labels_matrix[r][c]
-                    form_data[field] = "—"
-                    draw.rectangle([(x1, y1), (x2, y2)], outline="orange", width=2)
-                    draw.text((x1 + 5, y1 + 5), f"[Fallback] {field}", fill="gray")
+                draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
+                draw.text((x1 + 4, y1 + 4), field, fill="blue")
 
         buffer = BytesIO()
         preview_img.save(buffer, format="PNG")
         buffer.seek(0)
         annotated = Image.open(buffer)
-        st.image(np.array(annotated), caption=f"🖼️ Φόρμα {form_id} — Annotated Grid", use_column_width=True)
+        st.image(np.array(annotated), caption=f"🖼️ Φόρμα {form_id} — Clean Grid Preview", use_column_width=True)
 
         st.session_state.extracted_values[str(form_id)] = form_data
 
