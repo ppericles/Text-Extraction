@@ -9,7 +9,7 @@ from google.cloud import vision
 from google.cloud.vision_v1 import types
 
 st.set_page_config(layout="wide", page_title="Greek Registry Contour Reviewer")
-st.title("📜 Greek Registry OCR with Manual Cell Selection")
+st.title("📜 Greek Registry OCR with Persistent Selection")
 
 form_ids = [1, 2, 3]
 labels_matrix = [
@@ -17,19 +17,16 @@ labels_matrix = [
     ["ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"]
 ]
 
-# === Session Setup ===
-if "contour_boxes" not in st.session_state:
-    st.session_state.contour_boxes = {}
-if "selected_boxes" not in st.session_state:
-    st.session_state.selected_boxes = {}
-if "extracted_values" not in st.session_state:
-    st.session_state.extracted_values = {}
+# Initialize session state
+for key in ["contour_boxes", "selected_boxes", "extracted_values"]:
+    if key not in st.session_state:
+        st.session_state[key] = {}
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
-uploaded_file = st.file_uploader("📎 Upload registry page", type=["jpg", "jpeg", "png"])
-refresh = st.sidebar.button("🔄 Reset Selection")
+uploaded_file = st.file_uploader("📎 Upload registry image", type=["jpg", "jpeg", "png"])
+reset_all = st.sidebar.button("🔄 Reset All")
 
-if refresh:
+if reset_all:
     st.session_state.contour_boxes = {}
     st.session_state.selected_boxes = {}
     st.session_state.extracted_values = {}
@@ -43,8 +40,6 @@ if cred_file:
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
-
-if uploaded_file and cred_file:
     np_image = np.array(image)
     height, width = np_image.shape[:2]
     form_height = height // 3
@@ -59,8 +54,10 @@ if uploaded_file and cred_file:
         preview_img = Image.fromarray(crop_np).convert("RGB")
         draw = ImageDraw.Draw(preview_img)
 
-        if str(form_id) not in st.session_state.contour_boxes:
-            # First run: detect boxes
+        form_key = str(form_id)
+
+        if form_key not in st.session_state.contour_boxes:
+            # First-time contour detection
             gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
             _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
             binary = cv2.bitwise_not(binary)
@@ -71,32 +68,36 @@ if uploaded_file and cred_file:
 
             contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             max_w, max_h = crop_np.shape[1], crop_np.shape[0]
-            kept_boxes = []
+            boxes = []
             for c in contours:
                 x, y, w, h = cv2.boundingRect(c)
                 if w > 40 and h > 20 and w < max_w * 0.9 and h < max_h * 0.9:
-                    kept_boxes.append((x, y, w, h))
-            kept_boxes.sort(key=lambda b: (b[1], b[0]))
-            st.session_state.contour_boxes[str(form_id)] = kept_boxes
+                    boxes.append((x, y, w, h))
+            boxes.sort(key=lambda b: (b[1], b[0]))
+            st.session_state.contour_boxes[form_key] = boxes
 
-        kept_boxes = st.session_state.contour_boxes[str(form_id)]
+        if form_key not in st.session_state.selected_boxes:
+            st.session_state.selected_boxes[form_key] = {}
 
-        selected = []
-        for idx, box in enumerate(kept_boxes):
-            x, y, w, h = box
-            cb_label = f"Box {idx+1} → x={x}, y={y}, w={w}, h={h}"
-            checked = st.checkbox(cb_label, key=f"cb_{form_id}_{idx}")
-            if checked:
-                selected.append(box)
-            draw.rectangle([(x, y), (x + w, y + h)], outline="purple", width=2)
-            draw.text((x + 4, y + 4), f"{idx+1}", fill="purple")
-
-        st.session_state.selected_boxes[str(form_id)] = selected
+        boxes = st.session_state.contour_boxes[form_key]
         form_data = {}
         field_idx = 0
 
-        for box in selected:
+        for idx, box in enumerate(boxes):
+            x, y, w, h = box
+            cb_key = f"cb_{form_key}_{idx}"
+            if cb_key not in st.session_state.selected_boxes[form_key]:
+                st.session_state.selected_boxes[form_key][cb_key] = False
+            checkbox = st.checkbox(f"Box {idx+1} → x={x}, y={y}, w={w}, h={h}", value=st.session_state.selected_boxes[form_key][cb_key], key=cb_key)
+            st.session_state.selected_boxes[form_key][cb_key] = checkbox
+            draw.rectangle([(x, y), (x + w, y + h)], outline="purple", width=2)
+            draw.text((x + 4, y + 4), f"{idx+1}", fill="purple")
+
+        for idx, box in enumerate(boxes):
             if field_idx >= 8:
+                break
+            cb_key = f"cb_{form_key}_{idx}"
+            if not st.session_state.selected_boxes[form_key].get(cb_key):
                 continue
             x, y, w, h = box
             x1 = max(0, x - pad)
@@ -119,7 +120,7 @@ if uploaded_file and cred_file:
             draw.text((x1 + 4, y1 + 4), field, fill="blue")
             field_idx += 1
 
-        st.session_state.extracted_values[str(form_id)] = form_data
+        st.session_state.extracted_values[form_key] = form_data
 
         buffer = BytesIO()
         preview_img.save(buffer, format="PNG")
@@ -130,8 +131,8 @@ if uploaded_file and cred_file:
         st.markdown(f"### ✏️ Review Φόρμα {form_id}")
         for field in labels_matrix[0] + labels_matrix[1]:
             val = form_data.get(field, "")
-            corrected = st.text_input(f"{field}", value=val, key=f"{form_id}_{field}")
-            st.session_state.extracted_values[str(form_id)][field] = corrected
+            corrected = st.text_input(f"{field}", value=val, key=f"{form_key}_{field}")
+            st.session_state.extracted_values[form_key][field] = corrected
 
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Final Data")
