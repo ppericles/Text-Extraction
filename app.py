@@ -72,7 +72,7 @@ if uploaded_file and cred_file and st.button("🔍 Run OCR with Smart Boxes"):
             x, y, w, h = cv2.boundingRect(c)
             if w > 40 and h > 20 and w < max_w * 0.9 and h < max_h * 0.9:
                 boxes.append((x, y, w, h))
-        boxes.sort(key=lambda b: (b[1], b[0]))  # sort top to bottom, then left to right
+        boxes.sort(key=lambda b: (b[1], b[0]))
 
         form_data = {}
         for idx, box in enumerate(boxes[:8]):
@@ -95,16 +95,20 @@ if uploaded_file and cred_file and st.button("🔍 Run OCR with Smart Boxes"):
             form_data[field] = value
 
             # Determine box color
-            if color_modes[mode] is True:  # Confidence mode
+            if color_modes[mode] is True:
                 if confidence >= 90:
                     box_color = "green"
                 elif confidence >= 70:
                     box_color = "yellow"
                 else:
                     box_color = "red"
-            elif color_modes[mode] is False:  # Field type mode
+            elif color_modes[mode] is False:
                 cat = field_categories.get(field, "identity")
-                box_color = {"identity": "blue", "origin": "orange", "admin": "purple"}.get(cat, "gray")
+                box_color = {
+                    "identity": "blue",
+                    "origin": "purple",
+                    "admin": "green"
+                }.get(cat, "gray")
             else:
                 box_color = "red"
 
