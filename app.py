@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageDraw
 import json
 import os
 from io import BytesIO
@@ -8,8 +8,8 @@ import cv2
 from google.cloud import vision
 from google.cloud.vision_v1 import types
 
-st.set_page_config(layout="wide", page_title="Greek Registry Key-Value Extractor")
-st.title("📜 Greek Registry Key-Value Extractor")
+st.set_page_config(layout="wide", page_title="Greek Registry OCR")
+st.title("📜 Greek Registry Key-Value OCR")
 
 form_ids = [1, 2, 3]
 labels = [
@@ -17,13 +17,13 @@ labels = [
     "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"
 ]
 
-# === Initialize session state
+# === Initialize state
 if "extracted_values" not in st.session_state:
     st.session_state.extracted_values = {}
 
-# === Sidebar Inputs
+# === Sidebar
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
-uploaded_file = st.file_uploader("📎 Upload scanned registry", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📎 Upload registry scan", type=["jpg", "jpeg", "png"])
 
 if cred_file:
     with open("credentials.json", "wb") as f:
@@ -33,9 +33,9 @@ if cred_file:
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
+    st.image(image, caption="📄 Uploaded Registry", use_column_width=True)
 
-# === Main OCR block
+# === Key-Value Extraction
 if uploaded_file and cred_file and st.button("🔍 Extract Key-Value Pairs"):
     np_image = np.array(image)
     height, width = np_image.shape[:2]
@@ -46,10 +46,10 @@ if uploaded_file and cred_file and st.button("🔍 Extract Key-Value Pairs"):
     for form_id in form_ids:
         y1 = (form_id - 1) * form_height
         y2 = y1 + form_height
-        form_crop = np_image[y1:y2, :left_width]
+        form_crop = np_image[y1:y2, :left_width].copy()
         st.subheader(f"📄 Φόρμα {form_id}")
 
-        # Preprocessing for grid detection
+        # Grid preprocessing
         gray = cv2.cvtColor(form_crop, cv2.COLOR_RGB2GRAY)
         _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
         binary = cv2.bitwise_not(binary)
@@ -78,17 +78,26 @@ if uploaded_file and cred_file and st.button("🔍 Extract Key-Value Pairs"):
             response = client.document_text_detection(image=vision_img)
             raw_text = response.full_text_annotation.text.strip()
             lines = raw_text.split("\n")
-
             key = labels[i]
-            value = " ".join(lines[1:]).strip() if len(lines) >= 2 else raw_text
+            value = " ".join(lines[1:]).strip() if len(lines) >= 2 else lines[0]
             form_data[key] = value
 
             st.image(cell_crop, caption=f"📎 {key}: {value}", width=400)
 
         st.session_state.extracted_values[str(form_id)] = form_data
 
-# === Export Results
+        # Debug overlay
+        preview = Image.fromarray(form_crop)
+        draw = ImageDraw.Draw(preview)
+        for i, (x, y, w, h) in enumerate(boxes):
+            lbl = labels[i] if i < len(labels) else f"Cell {i+1}"
+            val = form_data.get(lbl, "—")
+            draw.rectangle([(x, y), (x+w, y+h)], outline="red", width=2)
+            draw.text((x+5, y+5), f"{lbl}: {val}", fill="blue")
+        st.image(preview, caption=f"🔍 Φόρμα {form_id} Cell Preview", use_column_width=True)
+
+# === Export
 if st.session_state.extracted_values:
-    st.markdown("## 💾 Export Structured Data")
+    st.markdown("## 💾 Export Data")
     export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
     st.download_button("💾 Export as JSON", data=export_json, file_name="registry_data.json", mime="application/json")
