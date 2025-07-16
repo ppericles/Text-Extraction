@@ -5,10 +5,11 @@ import os
 from io import BytesIO
 import numpy as np
 import cv2
+import pandas as pd
 from google.cloud import vision
 from google.cloud.vision_v1 import types
 
-st.set_page_config(layout="wide", page_title="Greek Registry Key-Value Grid")
+st.set_page_config(layout="wide", page_title="Greek Registry Parser")
 st.title("📜 Greek Registry Key-Value Grid Parser")
 
 form_ids = [1, 2, 3]
@@ -17,11 +18,13 @@ labels_matrix = [
     ["ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"]
 ]
 
+# === Session State
 if "extracted_values" not in st.session_state:
     st.session_state.extracted_values = {}
 
+# === Inputs
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
-uploaded_file = st.file_uploader("📎 Upload registry page", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📎 Upload scanned registry", type=["jpg", "jpeg", "png"])
 
 if cred_file:
     with open("credentials.json", "wb") as f:
@@ -31,9 +34,10 @@ if cred_file:
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
+    st.image(image, caption="📄 Uploaded Registry", use_column_width=True)
 
-if uploaded_file and cred_file and st.button("🔍 Parse Forms"):
+# === Main Extraction Logic
+if uploaded_file and cred_file and st.button("🔍 Parse and Review"):
     np_image = np.array(image)
     h, w = np_image.shape[:2]
     form_h = h // 3
@@ -44,31 +48,33 @@ if uploaded_file and cred_file and st.button("🔍 Parse Forms"):
         y1 = (form_id - 1) * form_h
         y2 = y1 + form_h
         form_crop = np_image[y1:y2, :left_w].copy()
+
+        # Preprocess for lines
         gray = cv2.cvtColor(form_crop, cv2.COLOR_RGB2GRAY)
         _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
         binary = cv2.bitwise_not(binary)
-
-        # Detect lines
         scale = 20
-        horizontal = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (scale, 1)), iterations=1),
-                                cv2.getStructuringElement(cv2.MORPH_RECT, (scale, 1)), iterations=1)
-        vertical = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (1, scale)), iterations=1),
-                              cv2.getStructuringElement(cv2.MORPH_RECT, (1, scale)), iterations=1)
 
-        # Find lines
-        lines_y = cv2.reduce(horizontal, 1, cv2.REDUCE_MAX).reshape(-1)
+        horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (scale, 1))
+        vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, scale))
+        horiz = cv2.dilate(cv2.erode(binary, horiz_kernel), horiz_kernel)
+        vert = cv2.dilate(cv2.erode(binary, vert_kernel), vert_kernel)
+        grid_mask = cv2.bitwise_and(horiz, vert)
+
+        # Line coordinates
+        lines_y = cv2.reduce(horiz, 1, cv2.REDUCE_MAX).reshape(-1)
         y_coords = [i for i in range(len(lines_y)) if lines_y[i] < 255]
         y_clusters = [y_coords[i] for i in range(0, len(y_coords), max(1, len(y_coords)//3))][:3]
 
-        lines_x = cv2.reduce(vertical, 0, cv2.REDUCE_MAX).reshape(-1)
+        lines_x = cv2.reduce(vert, 0, cv2.REDUCE_MAX).reshape(-1)
         x_coords = [i for i in range(len(lines_x)) if lines_x[i] < 255]
         x_clusters = [x_coords[i] for i in range(0, len(x_coords), max(1, len(x_coords)//5))][:5]
 
-        # Build 2x4 grid
-        form_data = {}
         preview = Image.fromarray(form_crop)
         draw = ImageDraw.Draw(preview)
+        form_data = {}
 
+        st.subheader(f"📄 Φόρμα {form_id}")
         for row in range(2):
             for col in range(4):
                 if row >= len(labels_matrix) or col >= len(labels_matrix[row]):
@@ -90,18 +96,36 @@ if uploaded_file and cred_file and st.button("🔍 Parse Forms"):
 
                     field = labels_matrix[row][col]
                     form_data[field] = value
-
                     draw.rectangle([(x_start, y_start), (x_end, y_end)], outline="red", width=2)
                     draw.text((x_start + 5, y_start + 5), f"{field}", fill="blue")
                 except Exception as e:
                     form_data[labels_matrix[row][col]] = "🟥 Error"
 
         st.session_state.extracted_values[str(form_id)] = form_data
-        st.subheader(f"📄 Φόρμα {form_id}")
-        st.image(preview, caption=f"🔍 Grid Layout — Φόρμα {form_id}", use_column_width=True)
+        st.image(preview, caption=f"🔍 Bounding Boxes — Φόρμα {form_id}", use_column_width=True)
 
-# === Export
+        # Review Panel
+        st.markdown(f"### ✏️ Review Φόρμα {form_id}")
+        for field in labels_matrix[0] + labels_matrix[1]:
+            current_val = form_data.get(field, "")
+            new_val = st.text_input(f"{field}", value=current_val, key=f"{form_id}_{field}")
+            st.session_state.extracted_values[str(form_id)][field] = new_val
+
+# === Export Buttons
 if st.session_state.extracted_values:
-    st.markdown("## 💾 Export JSON")
+    st.markdown("## 💾 Export Data")
+
+    # JSON
     export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
     st.download_button("💾 Download JSON", data=export_json, file_name="registry_data.json", mime="application/json")
+
+    # CSV
+    all_rows = []
+    for form_id, data in st.session_state.extracted_values.items():
+        row = {"Φόρμα": form_id}
+        row.update(data)
+        all_rows.append(row)
+
+    df = pd.DataFrame(all_rows)
+    csv_data = df.to_csv(index=False)
+    st.download_button("📤 Download CSV", data=csv_data, file_name="registry_data.csv", mime="text/csv")
