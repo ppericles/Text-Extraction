@@ -18,11 +18,9 @@ labels_matrix = [
     ["ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"]
 ]
 
-# === Session State
 if "extracted_values" not in st.session_state:
     st.session_state.extracted_values = {}
 
-# === Inputs
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
 uploaded_file = st.file_uploader("📎 Upload scanned registry", type=["jpg", "jpeg", "png"])
 
@@ -36,28 +34,25 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
 
-# === Processing Forms
 if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
     np_image = np.array(image)
-    h, w = np_image.shape[:2]
-    form_h = h // 3
-    left_w = w // 2
+    height, width = np_image.shape[:2]
+    form_height = height // 3
+    left_width = width // 2
     pad = 5
 
     client = vision.ImageAnnotatorClient()
+
     for form_id in form_ids:
-        y1, y2 = (form_id - 1) * form_h, form_id * form_h
-        form_crop = np_image[y1:y2, :left_w].copy()
+        y1, y2 = (form_id - 1) * form_height, form_id * form_height
+        form_crop = np_image[y1:y2, :left_width].copy()
         gray = cv2.cvtColor(form_crop, cv2.COLOR_RGB2GRAY)
         _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
         binary = cv2.bitwise_not(binary)
 
-        # Line detection
         scale = 20
-        horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1))
-        vert_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale))
-        horiz = cv2.dilate(cv2.erode(binary, horiz_kernel), horiz_kernel)
-        vert  = cv2.dilate(cv2.erode(binary, vert_kernel), vert_kernel)
+        horiz = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1))), cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1)))
+        vert  = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale))), cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale)))
 
         lines_y = cv2.reduce(horiz, 1, cv2.REDUCE_MAX).reshape(-1)
         y_coords = [i for i in range(len(lines_y)) if lines_y[i] < 255]
@@ -96,25 +91,29 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
                 except:
                     form_data[field] = "—"
 
-        st.session_state.extracted_values[str(form_id)] = form_data
-        st.image(np.array(preview), caption=f"🖼️ Bounding Boxes with Labels — Φόρμα {form_id}", use_column_width=True)
+        # Save and reload preview image for visibility
+        preview_bytes = BytesIO()
+        preview.save(preview_bytes, format="PNG")
+        preview_bytes.seek(0)
+        preview_np = np.array(Image.open(preview_bytes))
 
-        # Editable Review Panel
+        st.session_state.extracted_values[str(form_id)] = form_data
+        st.image(preview_np, caption=f"🖼️ Bounding Boxes with Labels — Φόρμα {form_id}", use_column_width=True)
+
+        # Review panel
         st.markdown(f"### ✏️ Review Φόρμα {form_id}")
         for field in labels_matrix[0] + labels_matrix[1]:
             val = form_data.get(field, "")
             corrected = st.text_input(f"{field}", value=val, key=f"{form_id}_{field}")
             st.session_state.extracted_values[str(form_id)][field] = corrected
 
-# === Export Options
+# === Export
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Final Data")
 
-    # JSON
     export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
     st.download_button("💾 Download JSON", data=export_json, file_name="registry_data.json", mime="application/json")
 
-    # CSV
     rows = []
     for fid, fields in st.session_state.extracted_values.items():
         row = {"Φόρμα": fid}
