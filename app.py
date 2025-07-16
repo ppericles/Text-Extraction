@@ -45,9 +45,11 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
 
     for form_id in form_ids:
         y1, y2 = (form_id - 1) * form_height, form_id * form_height
-        form_crop = np_image[y1:y2, :left_width].copy()
+        form_crop_np = np_image[y1:y2, :left_width].copy()
+        form_crop = Image.fromarray(form_crop_np).convert("RGB")
+        draw = ImageDraw.Draw(form_crop)
 
-        gray = cv2.cvtColor(form_crop, cv2.COLOR_RGB2GRAY)
+        gray = cv2.cvtColor(np.array(form_crop), cv2.COLOR_RGB2GRAY)
         _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
         binary = cv2.bitwise_not(binary)
 
@@ -64,8 +66,6 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
         x_clusters = [x_coords[i] for i in range(0, len(x_coords), max(1, len(x_coords)//5))][:5]
 
         form_data = {}
-        preview = Image.fromarray(form_crop).convert("RGB")
-        draw = ImageDraw.Draw(preview)
 
         st.subheader(f"📄 Φόρμα {form_id}")
         for r in range(2):
@@ -73,14 +73,13 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
                 field = labels_matrix[r][c]
                 try:
                     y_start = max(0, y_clusters[r] - pad)
-                    y_end   = min(form_crop.shape[0], y_clusters[r+1] + pad if r+1 < len(y_clusters) else form_crop.shape[0])
+                    y_end   = min(form_crop.height, y_clusters[r+1] + pad if r+1 < len(y_clusters) else form_crop.height)
                     x_start = max(0, x_clusters[c] - pad)
-                    x_end   = min(form_crop.shape[1], x_clusters[c+1] + pad if c+1 < len(x_clusters) else form_crop.shape[1])
-                    cell_crop = form_crop[y_start:y_end, x_start:x_end]
+                    x_end   = min(form_crop.width, x_clusters[c+1] + pad if c+1 < len(x_clusters) else form_crop.width)
 
-                    pil_img = Image.fromarray(cell_crop)
+                    cell_crop = form_crop.crop((x_start, y_start, x_end, y_end))
                     buffer = BytesIO()
-                    pil_img.save(buffer, format="JPEG")
+                    cell_crop.save(buffer, format="JPEG")
                     vision_img = types.Image(content=buffer.getvalue())
                     response = client.document_text_detection(image=vision_img)
                     raw_text = response.full_text_annotation.text.strip()
@@ -88,20 +87,22 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
                     form_data[field] = value
 
                     draw.rectangle([(x_start, y_start), (x_end, y_end)], outline="red", width=2)
-                    draw.text((x_start + 4, y_start + 4), f"{field}", fill="blue")
+                    draw.text((x_start + 5, y_start + 5), field, fill="blue")
                 except:
                     form_data[field] = "—"
 
-        # Save preview and reload to ensure annotations persist
+        # Add test overlay to confirm drawing
+        draw.rectangle([(10, 10), (210, 60)], outline="green", width=3)
+        draw.text((12, 12), "TEST BOX", fill="purple")
+
         preview_buffer = BytesIO()
-        preview.save(preview_buffer, format="PNG")
+        form_crop.save(preview_buffer, format="PNG")
         preview_buffer.seek(0)
-        annotated_image = Image.open(preview_buffer)
-        st.image(np.array(annotated_image), caption=f"🖼️ Bounding Boxes with Labels — Φόρμα {form_id}", use_column_width=True)
+        annotated_img = Image.open(preview_buffer)
+        st.image(np.array(annotated_img), caption=f"🖼️ Φόρμα {form_id} with Boxes & Labels", use_column_width=True)
 
         st.session_state.extracted_values[str(form_id)] = form_data
 
-        # Review fields
         st.markdown(f"### ✏️ Review Φόρμα {form_id}")
         for field in labels_matrix[0] + labels_matrix[1]:
             val = form_data.get(field, "")
@@ -111,7 +112,6 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
 # === Export
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Final Data")
-
     export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
     st.download_button("💾 Download JSON", data=export_json, file_name="registry_data.json", mime="application/json")
 
