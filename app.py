@@ -97,7 +97,7 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
                     form_data[field] = "—"
 
         st.session_state.extracted_values[str(form_id)] = form_data
-        st.image(preview, caption=f"🖼️ Bounding Boxes with Labels — Φόρμα {form_id}", use_column_width=True)
+        st.image(np.array(preview), caption=f"🖼️ Bounding Boxes with Labels — Φόρμα {form_id}", use_column_width=True)
 
         # Editable Review Panel
         st.markdown(f"### ✏️ Review Φόρμα {form_id}")
