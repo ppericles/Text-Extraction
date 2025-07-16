@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import cv2
 from google.cloud import vision
+from google.cloud.vision_v1 import types
 
 st.set_page_config(layout="wide", page_title="Greek Registry Grid Extractor")
 st.title("📜 Greek Registry Key-Value Grid Parser")
@@ -42,46 +43,42 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
     client = vision.ImageAnnotatorClient()
 
     for form_id in form_ids:
-        y1 = (form_id - 1) * form_height
-        y2 = y1 + form_height
+        y1, y2 = (form_id - 1) * form_height, form_id * form_height
         form_crop_np = np_image[y1:y2, :left_width].copy()
         preview_img = Image.fromarray(form_crop_np).convert("RGB")
         draw = ImageDraw.Draw(preview_img)
 
         gray = cv2.cvtColor(form_crop_np, cv2.COLOR_RGB2GRAY)
         _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
-        binary = cv2.bitwise_not(binary)
 
-        # Morphological line detection
         scale = 20
-        horizontal = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (scale, 1))), cv2.getStructuringElement(cv2.MORPH_RECT, (scale, 1)))
-        vertical = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (1, scale))), cv2.getStructuringElement(cv2.MORPH_RECT, (1, scale)))
+        horizontal = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1))), cv2.getStructuringElement(cv2.MORPH_RECT, (scale,1)))
+        vertical = cv2.dilate(cv2.erode(binary, cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale))), cv2.getStructuringElement(cv2.MORPH_RECT, (1,scale)))
         grid_mask = cv2.bitwise_and(horizontal, vertical)
 
         contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         boxes = [cv2.boundingRect(c) for c in contours if cv2.boundingRect(c)[2] > 40 and cv2.boundingRect(c)[3] > 20]
 
-        # Cluster into grid
-        def cluster_boxes(boxes, row_tol=15, col_tol=15):
+        def cluster_boxes(boxes, row_tol=15):
             rows = []
             for box in sorted(boxes, key=lambda b: b[1]):
                 x, y, w, h = box
-                inserted = False
+                added = False
                 for r in rows:
                     if abs(r[0][1] - y) <= row_tol:
                         r.append(box)
-                        inserted = True
+                        added = True
                         break
-                if not inserted:
+                if not added:
                     rows.append([box])
             for r in rows:
-                r.sort(key=lambda b: b[0])  # sort left to right
+                r.sort(key=lambda b: b[0])
             return rows
 
         clustered = cluster_boxes(boxes)
-
         form_data = {}
         st.subheader(f"📄 Φόρμα {form_id}")
+
         for row_idx, row in enumerate(clustered[:2]):
             for col_idx, box in enumerate(row[:4]):
                 if row_idx >= len(labels_matrix) or col_idx >= len(labels_matrix[row_idx]):
@@ -95,7 +92,8 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
                 Image.fromarray(cell_np).save(buffer, format="JPEG")
                 buffer.seek(0)
 
-                response = client.document_text_detection(image=vision.Image(content=buffer.getvalue()))
+                vision_img = types.Image(content=buffer.getvalue())
+                response = client.document_text_detection(image=vision_img)
                 text = response.full_text_annotation.text.strip()
                 value = " ".join(text.split("\n")).strip()
                 field = labels_matrix[row_idx][col_idx]
@@ -104,7 +102,6 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
                 draw.rectangle([(x_start, y_start), (x_end, y_end)], outline="red", width=2)
                 draw.text((x_start + 5, y_start + 5), field, fill="blue")
 
-        # Final image for display
         buffer = BytesIO()
         preview_img.save(buffer, format="PNG")
         buffer.seek(0)
@@ -119,7 +116,6 @@ if uploaded_file and cred_file and st.button("🔍 Parse and Preview Forms"):
             corrected = st.text_input(f"{field}", value=val, key=f"{form_id}_{field}")
             st.session_state.extracted_values[str(form_id)][field] = corrected
 
-# === Export
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Final Data")
     export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
