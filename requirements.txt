@@ -1,11 +1,6 @@
 streamlit
-streamlit-drawable-canvas
-streamlit-image-coordinates==0.1.2
+Pillow
+opencv-python
 numpy
-pillow
-unidecode
-google-cloud-vision
-layoutparser[ocr]
-opencv-python-headless
-protobuf==3.20.3
-setuptools
+pandas
+google-cloud-documentai
