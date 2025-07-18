@@ -43,7 +43,7 @@ if cred_file:
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
-        np_image = np.array(image)
+    np_image = np.array(image)
     height, width = np_image.shape[:2]
     form_height = height // 3
     left_width = width // 2
