@@ -97,3 +97,37 @@ if uploaded_file:
 
             merged_boxes = merge_boxes(raw_boxes)
             st.session_state.contour_boxes[form_key] = merged_boxes
+                    buffer = BytesIO()
+        preview_img.save(buffer, format="PNG")
+        buffer.seek(0)
+        annotated = Image.open(buffer)
+        st.image(np.array(annotated), caption=f"🖼️ Φόρμα {form_id} — Final Grid", use_column_width=True)
+
+        st.markdown(f"### ✏️ Review Φόρμα {form_id}")
+        for field in labels_matrix[0] + labels_matrix[1]:
+            val = form_data.get(field, "")
+            corrected = st.text_input(f"{field}", value=val, key=f"{form_key}_{field}")
+            st.session_state.extracted_values[form_key][field] = corrected
+
+if st.session_state.extracted_values:
+    st.markdown("## 💾 Export Final Data")
+
+    export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
+    st.download_button("💾 Download JSON",
+        data=export_json,
+        file_name="registry_data.json",
+        mime="application/json"
+    )
+
+    rows = []
+    for fid, fields in st.session_state.extracted_values.items():
+        row = {"Φόρμα": fid}
+        row.update(fields)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    st.download_button("📤 Download CSV",
+        data=df.to_csv(index=False),
+        file_name="registry_data.csv",
+        mime="text/csv"
+    )
