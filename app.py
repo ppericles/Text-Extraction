@@ -173,7 +173,7 @@ if uploaded_file:
         st.image(np.array(Image.open(buffer)), caption=f"🖼️ Φόρμα {form_id} — Final Grid", use_column_width=True)
 
         st.markdown("### 🖱️ Hover Box Summary")
-                df_hover = pd.DataFrame(hover_table)
+        df_hover = pd.DataFrame(hover_table)
         st.dataframe(df_hover, use_container_width=True)
 
 # 💾 Export Final Data
