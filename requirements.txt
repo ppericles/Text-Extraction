@@ -4,3 +4,5 @@ opencv-python
 numpy
 pandas
 google-cloud-documentai
+google-cloud-vision
+protobuf==3.20.3
