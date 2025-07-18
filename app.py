@@ -1,3 +1,4 @@
+# PART 1: Setup + Upload Logic
 import streamlit as st
 from PIL import Image, ImageDraw
 import os, json
@@ -9,7 +10,7 @@ from google.cloud import vision
 from google.cloud.vision_v1 import types
 
 st.set_page_config(layout="wide", page_title="Greek Registry OCR")
-st.title("📜 Greek Registry with Smart Box Detection & Review Table")
+st.title("📜 Greek Registry with Clean Box Detection & Review Table")
 
 form_ids = [1, 2, 3]
 labels_matrix = [
@@ -63,9 +64,11 @@ if uploaded_file:
 
             contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             raw_boxes = []
+            margin = 10
             for c in contours:
                 x, y, w, h = cv2.boundingRect(c)
-                if w > 40 and h > 20 and w < crop_np.shape[1] * 0.95 and h < crop_np.shape[0] * 0.95:
+                if w > 40 and h > 20 and x > margin and y > margin and \
+                   x + w < crop_np.shape[1] - margin and y + h < crop_np.shape[0] - margin:
                     raw_boxes.append((x, y, w, h))
 
             def merge_boxes(boxes, threshold=15):
@@ -116,7 +119,6 @@ if uploaded_file:
             draw.rectangle([(x, y), (x + w, y + h)], outline="purple", width=2)
             draw.text((x + 4, y + 4), f"{idx+1}", fill="purple")
 
-            # OCR
             x1 = max(0, x - pad)
             y1 = max(0, y - pad)
             x2 = x + w + pad
@@ -147,7 +149,7 @@ if uploaded_file:
                 draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
                 draw.text((x1 + 4, y1 + 4), field, fill="blue")
                 field_idx += 1
-        st.markdown(f"### ✏️ Review Φόρμα {form_id}")
+                        st.markdown(f"### ✏️ Review Φόρμα {form_id}")
         for field in labels_matrix[0] + labels_matrix[1]:
             val = form_data.get(field, "")
             corrected = st.text_input(f"{field}", value=val, key=f"{form_key}_{field}")
@@ -162,7 +164,7 @@ if uploaded_file:
         df_hover = pd.DataFrame(hover_table)
         st.dataframe(df_hover, use_container_width=True)
 
-# Final Export Panel
+# 📤 Final Export Panel
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Final Data")
 
