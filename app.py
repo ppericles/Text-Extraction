@@ -25,7 +25,7 @@ if not uploaded_file:
     st.stop()
 
 # 📍 GCP Details
-project_id = "Handwritten_Form_Parser"
+project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
 
