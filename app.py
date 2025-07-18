@@ -159,7 +159,7 @@ if uploaded_file:
                 draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
                 draw.text((x1 + 4, y1 + 4), field, fill="blue")
                 field_idx += 1
-           st.markdown(f"### ✏️ Review Φόρμα {form_id}")
+        st.markdown(f"### ✏️ Review Φόρμα {form_id}")
         for field in labels_matrix[0] + labels_matrix[1]:
             val = form_data.get(field, "")
             corrected = st.text_input(f"{field}", value=val, key=f"{form_key}_{field}")
