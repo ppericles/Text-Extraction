@@ -17,22 +17,20 @@ labels_matrix = [
     ["ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"]
 ]
 
-for key in ["contour_boxes", "selected_boxes", "extracted_values"]:
+for key in ["selected_boxes", "extracted_values"]:
     if key not in st.session_state:
         st.session_state[key] = {}
 
-# Sidebar settings
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
 margin = st.sidebar.slider("📏 Edge exclusion margin (px)", 0, 30, 2)
 debug_mode = st.sidebar.checkbox("🧪 Show excluded boxes")
-
 uploaded_file = st.file_uploader("📎 Upload registry page", type=["jpg", "jpeg", "png"])
+
 if st.sidebar.button("🔄 Reset All"):
-    st.session_state.contour_boxes = {}
     st.session_state.selected_boxes = {}
     st.session_state.extracted_values = {}
+    st.session_state.contour_cache = {}
 
-# Load credentials and image
 if cred_file:
     with open("credentials.json", "wb") as f:
         f.write(cred_file.read())
@@ -56,8 +54,9 @@ if uploaded_file:
         preview_img = Image.fromarray(crop_np).convert("RGB")
         draw = ImageDraw.Draw(preview_img)
         form_key = str(form_id)
+        cache_key = f"{form_key}_margin_{margin}_debug_{debug_mode}"
 
-        if form_key not in st.session_state.contour_boxes:
+        if cache_key not in st.session_state.contour_cache:
             gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
             _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
             binary = cv2.bitwise_not(binary)
@@ -105,15 +104,15 @@ if uploaded_file:
                     merged.append((bx, by, bw, bh))
                 return sorted(merged, key=lambda b: (b[1], b[0]))
 
-            st.session_state.contour_boxes[form_key] = merge_boxes(raw_boxes)
-            if debug_mode and excluded_boxes:
+            st.session_state.contour_cache[cache_key] = merge_boxes(raw_boxes)
+            if debug_mode:
                 for x, y, w, h in excluded_boxes:
                     draw.rectangle([(x, y), (x + w, y + h)], outline="gray", width=1)
 
         if form_key not in st.session_state.selected_boxes:
             st.session_state.selected_boxes[form_key] = {}
 
-        boxes = st.session_state.contour_boxes[form_key]
+        boxes = st.session_state.contour_cache[cache_key]
         selected_boxes = st.session_state.selected_boxes[form_key]
         form_data = {}
         field_idx = 0
@@ -190,4 +189,4 @@ if st.session_state.extracted_values:
 
     df = pd.DataFrame(rows)
     st.download_button("📤 Download CSV", data=df.to_csv(index=False),
-                       file_name="registry_data.csv", mime="text/csv")     
+                       file_name="registry_data.csv", mime="text/csv")
