@@ -164,4 +164,3 @@ if uploaded_file:
         for field in labels_matrix[0] + labels_matrix[1]:
             val = form_data.get(field, "")
             corrected = st.text_input(f"{field}", value=val, key=f"{form_key}_{field}")
-            st.session
