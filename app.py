@@ -17,7 +17,7 @@ labels_matrix = [
     ["ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΤΟΠΟΣ ΓΕΝΝΗΣΕΩΣ", "ΕΤΟΣ ΓΕΝΝΗΣΕΩΣ", "ΚΑΤΟΙΚΙΑ"]
 ]
 
-for key in ["selected_boxes", "extracted_values"]:
+for key in ["selected_boxes", "extracted_values", "contour_cache"]:
     if key not in st.session_state:
         st.session_state[key] = {}
 
@@ -40,6 +40,7 @@ if cred_file:
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="📄 Uploaded Registry Page", use_column_width=True)
+
     np_image = np.array(image)
     height, width = np_image.shape[:2]
     form_height = height // 3
@@ -158,35 +159,9 @@ if uploaded_file:
                 draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
                 draw.text((x1 + 4, y1 + 4), field, fill="blue")
                 field_idx += 1
+
         st.markdown(f"### ✏️ Review Φόρμα {form_id}")
         for field in labels_matrix[0] + labels_matrix[1]:
             val = form_data.get(field, "")
             corrected = st.text_input(f"{field}", value=val, key=f"{form_key}_{field}")
-            st.session_state.extracted_values.setdefault(form_key, {})[field] = corrected
-
-        buffer = BytesIO()
-        preview_img.save(buffer, format="PNG")
-        buffer.seek(0)
-        st.image(np.array(Image.open(buffer)), caption=f"🖼️ Φόρμα {form_id} — Final Grid", use_column_width=True)
-
-        st.markdown("### 🖱️ Hover Box Summary")
-        df_hover = pd.DataFrame(hover_table)
-        st.dataframe(df_hover, use_container_width=True)
-
-# 💾 Export Final Data
-if st.session_state.extracted_values:
-    st.markdown("## 💾 Export Final Data")
-
-    export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
-    st.download_button("💾 Download JSON", data=export_json,
-                       file_name="registry_data.json", mime="application/json")
-
-    rows = []
-    for fid, fields in st.session_state.extracted_values.items():
-        row = {"Φόρμα": fid}
-        row.update(fields)
-        rows.append(row)
-
-    df = pd.DataFrame(rows)
-    st.download_button("📤 Download CSV", data=df.to_csv(index=False),
-                       file_name="registry_data.csv", mime="text/csv")
+            st.session
