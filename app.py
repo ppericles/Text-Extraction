@@ -97,7 +97,7 @@ if uploaded_file:
 
             merged_boxes = merge_boxes(raw_boxes)
             st.session_state.contour_boxes[form_key] = merged_boxes
-         buffer = BytesIO()
+        buffer = BytesIO()
         preview_img.save(buffer, format="PNG")
         buffer.seek(0)
         annotated = Image.open(buffer)
