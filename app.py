@@ -9,7 +9,7 @@ from google.cloud import vision
 from google.cloud.vision_v1 import types
 
 st.set_page_config(layout="wide", page_title="Greek Registry OCR")
-st.title("📜 Greek Registry with Smart Layout Detection")
+st.title("📜 Greek Registry with Smart Box Detection & Review Table")
 
 form_ids = [1, 2, 3]
 labels_matrix = [
@@ -22,7 +22,7 @@ for key in ["contour_boxes", "selected_boxes", "extracted_values"]:
         st.session_state[key] = {}
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
-uploaded_file = st.file_uploader("📎 Upload registry image", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("📎 Upload registry page", type=["jpg", "jpeg", "png"])
 if st.sidebar.button("🔄 Reset All"):
     st.session_state.contour_boxes = {}
     st.session_state.selected_boxes = {}
@@ -50,8 +50,8 @@ if uploaded_file:
         crop_np = np_image[y1:y2, :left_width].copy()
         preview_img = Image.fromarray(crop_np).convert("RGB")
         draw = ImageDraw.Draw(preview_img)
-
         form_key = str(form_id)
+
         if form_key not in st.session_state.contour_boxes:
             gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
             _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY_INV)
@@ -62,11 +62,10 @@ if uploaded_file:
             grid_mask = cv2.bitwise_and(horizontal, vertical)
 
             contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            max_w, max_h = crop_np.shape[1], crop_np.shape[0]
             raw_boxes = []
             for c in contours:
                 x, y, w, h = cv2.boundingRect(c)
-                if w > 40 and h > 20 and w < max_w * 0.95 and h < max_h * 0.95:
+                if w > 40 and h > 20 and w < crop_np.shape[1] * 0.95 and h < crop_np.shape[0] * 0.95:
                     raw_boxes.append((x, y, w, h))
 
             def merge_boxes(boxes, threshold=15):
@@ -95,29 +94,81 @@ if uploaded_file:
                     merged.append((bx, by, bw, bh))
                 return sorted(merged, key=lambda b: (b[1], b[0]))
 
-            merged_boxes = merge_boxes(raw_boxes)
-            st.session_state.contour_boxes[form_key] = merged_boxes
-        buffer = BytesIO()
-        preview_img.save(buffer, format="PNG")
-        buffer.seek(0)
-        annotated = Image.open(buffer)
-        st.image(np.array(annotated), caption=f"🖼️ Φόρμα {form_id} — Final Grid", use_column_width=True)
+            st.session_state.contour_boxes[form_key] = merge_boxes(raw_boxes)
 
+        if form_key not in st.session_state.selected_boxes:
+            st.session_state.selected_boxes[form_key] = {}
+
+        boxes = st.session_state.contour_boxes[form_key]
+        selected_boxes = st.session_state.selected_boxes[form_key]
+        form_data = {}
+        field_idx = 0
+        hover_table = []
+
+        for idx, box in enumerate(boxes):
+            x, y, w, h = box
+            cb_key = f"{form_key}_{idx}"
+            if cb_key not in selected_boxes:
+                selected_boxes[cb_key] = False
+            selected = st.checkbox(f"Box {idx+1} → x={x}, y={y}, w={w}, h={h}",
+                                   value=selected_boxes[cb_key], key=cb_key)
+            selected_boxes[cb_key] = selected
+            draw.rectangle([(x, y), (x + w, y + h)], outline="purple", width=2)
+            draw.text((x + 4, y + 4), f"{idx+1}", fill="purple")
+
+            # OCR
+            x1 = max(0, x - pad)
+            y1 = max(0, y - pad)
+            x2 = x + w + pad
+            y2 = y + h + pad
+            cell = crop_np[y1:y2, x1:x2]
+            buffer = BytesIO()
+            Image.fromarray(cell).save(buffer, format="JPEG")
+            buffer.seek(0)
+            vision_img = types.Image(content=buffer.getvalue())
+            response = client.document_text_detection(image=vision_img)
+            text = response.full_text_annotation.text.strip()
+            cleaned = " ".join(text.split("\n")).strip()
+            length = len(cleaned)
+
+            hover_table.append({
+                "ID": idx+1,
+                "Coords": f"x={x}, y={y}, w={w}, h={h}",
+                "Chars": length,
+                "Content": cleaned if length >= 3 else "(empty)",
+                "Selected": "✅" if selected else "—"
+            })
+
+            if selected and length >= 3 and field_idx < 8:
+                row = field_idx // 4
+                col = field_idx % 4
+                field = labels_matrix[row][col]
+                form_data[field] = cleaned
+                draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
+                draw.text((x1 + 4, y1 + 4), field, fill="blue")
+                field_idx += 1
         st.markdown(f"### ✏️ Review Φόρμα {form_id}")
         for field in labels_matrix[0] + labels_matrix[1]:
             val = form_data.get(field, "")
             corrected = st.text_input(f"{field}", value=val, key=f"{form_key}_{field}")
-            st.session_state.extracted_values[form_key][field] = corrected
+            st.session_state.extracted_values.setdefault(form_key, {})[field] = corrected
 
+        buffer = BytesIO()
+        preview_img.save(buffer, format="PNG")
+        buffer.seek(0)
+        st.image(np.array(Image.open(buffer)), caption=f"🖼️ Φόρμα {form_id} — Final Grid", use_column_width=True)
+
+        st.markdown("### 🖱️ Hover Box Summary")
+        df_hover = pd.DataFrame(hover_table)
+        st.dataframe(df_hover, use_container_width=True)
+
+# Final Export Panel
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Final Data")
 
     export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
-    st.download_button("💾 Download JSON",
-        data=export_json,
-        file_name="registry_data.json",
-        mime="application/json"
-    )
+    st.download_button("💾 Download JSON", data=export_json,
+                       file_name="registry_data.json", mime="application/json")
 
     rows = []
     for fid, fields in st.session_state.extracted_values.items():
@@ -126,8 +177,5 @@ if st.session_state.extracted_values:
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    st.download_button("📤 Download CSV",
-        data=df.to_csv(index=False),
-        file_name="registry_data.csv",
-        mime="text/csv"
-    )
+    st.download_button("📤 Download CSV", data=df.to_csv(index=False),
+                       file_name="registry_data.csv", mime="text/csv")
