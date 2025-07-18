@@ -102,7 +102,7 @@ if uploaded_file:
                 merged.append((gx, gy, gw, gh))
             merged.sort(key=lambda b: (b[1], b[0]))
             st.session_state.contour_boxes[form_key] = merged
-                    if form_key not in st.session_state.selected_boxes:
+            if form_key not in st.session_state.selected_boxes:
             st.session_state.selected_boxes[form_key] = {}
 
         selected_boxes = st.session_state.selected_boxes[form_key]
