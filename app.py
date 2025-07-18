@@ -22,8 +22,7 @@ for key in ["selected_boxes", "extracted_values", "contour_cache"]:
         st.session_state[key] = {}
 
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
-margin = st.sidebar.slider("📏 Edge exclusion margin (px)", 0, 30, 2)
-debug_mode = st.sidebar.checkbox("🧪 Show excluded boxes")
+debug_mode = st.sidebar.checkbox("🧪 Show excluded outer box")
 uploaded_file = st.file_uploader("📎 Upload registry page", type=["jpg", "jpeg", "png"])
 
 if st.sidebar.button("🔄 Reset All"):
@@ -50,13 +49,13 @@ if uploaded_file:
     for form_id in form_ids:
         st.subheader(f"📄 Φόρμα {form_id}")
         y1, y2 = (form_id - 1) * form_height, form_id * form_height
-        crop_np = np_image[y1:y2, :].copy()  # full width
+        crop_np = np_image[y1:y2, :].copy()
         st.image(crop_np, caption=f"🖼️ Cropped Φόρμα {form_id}", use_column_width=True)
 
         preview_img = Image.fromarray(crop_np).convert("RGB")
         draw = ImageDraw.Draw(preview_img)
         form_key = str(form_id)
-        cache_key = f"{form_key}_margin_{margin}_debug_{debug_mode}"
+        cache_key = f"{form_key}_debug_{debug_mode}"
 
         if cache_key not in st.session_state.contour_cache:
             gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
@@ -68,17 +67,13 @@ if uploaded_file:
             grid_mask = cv2.bitwise_and(horizontal, vertical)
 
             contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            raw_boxes = []
-            excluded_boxes = []
-            for c in contours:
-                x, y, w, h = cv2.boundingRect(c)
-                if w > 40 and h > 20:
-                    near_edge = x <= margin or y <= margin or x + w >= crop_np.shape[1] - margin or y + h >= crop_np.shape[0] - margin
-                    if near_edge:
-                        if debug_mode:
-                            excluded_boxes.append((x, y, w, h))
-                    else:
-                        raw_boxes.append((x, y, w, h))
+            boxes = [(cv2.boundingRect(c)) for c in contours if cv2.boundingRect(c)[2] > 40 and cv2.boundingRect(c)[3] > 20]
+            boxes = sorted(boxes, key=lambda b: b[2] * b[3])  # sort by area
+
+            excluded_box = None
+            if len(boxes) > 1:
+                excluded_box = boxes[-1]
+                boxes = boxes[:-1]
 
             def merge_boxes(boxes, threshold=15):
                 merged = []
@@ -106,10 +101,10 @@ if uploaded_file:
                     merged.append((bx, by, bw, bh))
                 return sorted(merged, key=lambda b: (b[1], b[0]))
 
-            st.session_state.contour_cache[cache_key] = merge_boxes(raw_boxes)
-            if debug_mode:
-                for x, y, w, h in excluded_boxes:
-                    draw.rectangle([(x, y), (x + w, y + h)], outline="gray", width=1)
+            st.session_state.contour_cache[cache_key] = merge_boxes(boxes)
+            if debug_mode and excluded_box:
+                x, y, w, h = excluded_box
+                draw.rectangle([(x, y), (x + w, y + h)], outline="gray", width=1)
 
         if form_key not in st.session_state.selected_boxes:
             st.session_state.selected_boxes[form_key] = {}
@@ -180,16 +175,4 @@ if uploaded_file:
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Final Data")
 
-    export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
-    st.download_button("💾 Download JSON", data=export_json,
-                       file_name="registry_data.json", mime="application/json")
-
-    rows = []
-    for fid, fields in st.session_state.extracted_values.items():
-        row = {"Φόρμα": fid}
-        row.update(fields)
-        rows.append(row)
-
-    df = pd.DataFrame(rows)
-    st.download_button("📤 Download CSV", data=df.to_csv(index=False),
-                       file_name="registry_data.csv", mime="text/csv")
+    export_json = json
