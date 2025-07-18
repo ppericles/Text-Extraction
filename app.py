@@ -1,4 +1,3 @@
-# PART 1: Setup + Upload Logic
 import streamlit as st
 from PIL import Image, ImageDraw
 import os, json
@@ -10,7 +9,7 @@ from google.cloud import vision
 from google.cloud.vision_v1 import types
 
 st.set_page_config(layout="wide", page_title="Greek Registry OCR")
-st.title("📜 Greek Registry with Clean Box Detection & Review Table")
+st.title("📜 Greek Registry OCR — Smart Contour + Hover Review")
 
 form_ids = [1, 2, 3]
 labels_matrix = [
@@ -22,13 +21,18 @@ for key in ["contour_boxes", "selected_boxes", "extracted_values"]:
     if key not in st.session_state:
         st.session_state[key] = {}
 
+# Sidebar settings
 cred_file = st.sidebar.file_uploader("🔐 Google credentials", type=["json"])
+margin = st.sidebar.slider("📏 Edge exclusion margin (px)", 0, 30, 2)
+debug_mode = st.sidebar.checkbox("🧪 Show excluded boxes")
+
 uploaded_file = st.file_uploader("📎 Upload registry page", type=["jpg", "jpeg", "png"])
 if st.sidebar.button("🔄 Reset All"):
     st.session_state.contour_boxes = {}
     st.session_state.selected_boxes = {}
     st.session_state.extracted_values = {}
 
+# Load credentials and image
 if cred_file:
     with open("credentials.json", "wb") as f:
         f.write(cred_file.read())
@@ -64,12 +68,16 @@ if uploaded_file:
 
             contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             raw_boxes = []
-            margin = 10
+            excluded_boxes = []
             for c in contours:
                 x, y, w, h = cv2.boundingRect(c)
-                if w > 40 and h > 20 and x > margin and y > margin and \
-                   x + w < crop_np.shape[1] - margin and y + h < crop_np.shape[0] - margin:
-                    raw_boxes.append((x, y, w, h))
+                if w > 40 and h > 20:
+                    near_edge = x <= margin or y <= margin or x + w >= crop_np.shape[1] - margin or y + h >= crop_np.shape[0] - margin
+                    if near_edge:
+                        if debug_mode:
+                            excluded_boxes.append((x, y, w, h))
+                    else:
+                        raw_boxes.append((x, y, w, h))
 
             def merge_boxes(boxes, threshold=15):
                 merged = []
@@ -98,6 +106,9 @@ if uploaded_file:
                 return sorted(merged, key=lambda b: (b[1], b[0]))
 
             st.session_state.contour_boxes[form_key] = merge_boxes(raw_boxes)
+            if debug_mode and excluded_boxes:
+                for x, y, w, h in excluded_boxes:
+                    draw.rectangle([(x, y), (x + w, y + h)], outline="gray", width=1)
 
         if form_key not in st.session_state.selected_boxes:
             st.session_state.selected_boxes[form_key] = {}
@@ -113,8 +124,7 @@ if uploaded_file:
             cb_key = f"{form_key}_{idx}"
             if cb_key not in selected_boxes:
                 selected_boxes[cb_key] = False
-            selected = st.checkbox(f"Box {idx+1} → x={x}, y={y}, w={w}, h={h}",
-                                   value=selected_boxes[cb_key], key=cb_key)
+            selected = st.checkbox(f"Box {idx+1} → x={x}, y={y}, w={w}, h={h}", value=selected_boxes[cb_key], key=cb_key)
             selected_boxes[cb_key] = selected
             draw.rectangle([(x, y), (x + w, y + h)], outline="purple", width=2)
             draw.text((x + 4, y + 4), f"{idx+1}", fill="purple")
@@ -149,7 +159,7 @@ if uploaded_file:
                 draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=2)
                 draw.text((x1 + 4, y1 + 4), field, fill="blue")
                 field_idx += 1
-        st.markdown(f"### ✏️ Review Φόρμα {form_id}")
+           st.markdown(f"### ✏️ Review Φόρμα {form_id}")
         for field in labels_matrix[0] + labels_matrix[1]:
             val = form_data.get(field, "")
             corrected = st.text_input(f"{field}", value=val, key=f"{form_key}_{field}")
@@ -164,7 +174,7 @@ if uploaded_file:
         df_hover = pd.DataFrame(hover_table)
         st.dataframe(df_hover, use_container_width=True)
 
-# 📤 Final Export Panel
+# 💾 Export Final Data
 if st.session_state.extracted_values:
     st.markdown("## 💾 Export Final Data")
 
@@ -180,4 +190,4 @@ if st.session_state.extracted_values:
 
     df = pd.DataFrame(rows)
     st.download_button("📤 Download CSV", data=df.to_csv(index=False),
-                       file_name="registry_data.csv", mime="text/csv")
+                       file_name="registry_data.csv", mime="text/csv")     
