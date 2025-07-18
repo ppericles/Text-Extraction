@@ -44,14 +44,15 @@ if uploaded_file:
     np_image = np.array(image)
     height, width = np_image.shape[:2]
     form_height = height // 3
-    left_width = width // 2
     pad = 5
     client = vision.ImageAnnotatorClient()
 
     for form_id in form_ids:
         st.subheader(f"📄 Φόρμα {form_id}")
         y1, y2 = (form_id - 1) * form_height, form_id * form_height
-        crop_np = np_image[y1:y2, :left_width].copy()
+        crop_np = np_image[y1:y2, :].copy()  # full width
+        st.image(crop_np, caption=f"🖼️ Cropped Φόρμα {form_id}", use_column_width=True)
+
         preview_img = Image.fromarray(crop_np).convert("RGB")
         draw = ImageDraw.Draw(preview_img)
         form_key = str(form_id)
@@ -164,3 +165,31 @@ if uploaded_file:
         for field in labels_matrix[0] + labels_matrix[1]:
             val = form_data.get(field, "")
             corrected = st.text_input(f"{field}", value=val, key=f"{form_key}_{field}")
+            st.session_state.extracted_values.setdefault(form_key, {})[field] = corrected
+
+        buffer = BytesIO()
+        preview_img.save(buffer, format="PNG")
+        buffer.seek(0)
+        st.image(np.array(Image.open(buffer)), caption=f"🖼️ Φόρμα {form_id} — Final Grid", use_column_width=True)
+
+        st.markdown("### 🖱️ Hover Box Summary")
+                df_hover = pd.DataFrame(hover_table)
+        st.dataframe(df_hover, use_container_width=True)
+
+# 💾 Export Final Data
+if st.session_state.extracted_values:
+    st.markdown("## 💾 Export Final Data")
+
+    export_json = json.dumps(st.session_state.extracted_values, indent=2, ensure_ascii=False)
+    st.download_button("💾 Download JSON", data=export_json,
+                       file_name="registry_data.json", mime="application/json")
+
+    rows = []
+    for fid, fields in st.session_state.extracted_values.items():
+        row = {"Φόρμα": fid}
+        row.update(fields)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    st.download_button("📤 Download CSV", data=df.to_csv(index=False),
+                       file_name="registry_data.csv", mime="text/csv")
