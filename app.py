@@ -2,28 +2,32 @@ import streamlit as st
 from PIL import Image
 import os, json, unicodedata
 import pandas as pd
-import numpy as np
 from io import BytesIO
 from google.cloud import documentai_v1 as documentai
 
-# 🔠 Normalize Greek: accent-free uppercase
+# 🔠 Normalize text: uppercase Greek without accents
 def normalize(text):
     if not text: return ""
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# ✂️ Crop to left half
+# ✂️ Crop image to left half
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# 📐 Split into 3 vertical zones
-def split_zones(image):
+# ✂️ Manually tuned vertical slices for 3 zones
+def split_zones_tuned(image):
     w, h = image.size
-    thirds = [int(h * i / 3) for i in range(4)]
-    return [image.crop((0, thirds[i], w, thirds[i+1])).convert("RGB") for i in range(3)]
+    boundaries = [(0.00, 0.32), (0.33, 0.65), (0.66, 1.00)]
+    zones = []
+    for top_pct, bottom_pct in boundaries:
+        top = int(h * top_pct)
+        bottom = int(h * bottom_pct)
+        zones.append(image.crop((0, top, w, bottom)).convert("RGB"))
+    return zones
 
-# 🔍 Parse with Document AI
+# 🔍 Parse zone with Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -63,19 +67,16 @@ def extract_table(doc):
     tokens = []
     for page in doc.pages:
         for token in page.tokens:
-            text = token.layout.text_anchor.content or ""
+            txt = token.layout.text_anchor.content or ""
             box = token.layout.bounding_poly.normalized_vertices
             y = sum(v.y for v in box) / len(box)
             x = sum(v.x for v in box) / len(box)
-            tokens.append({"text": normalize(text), "y": y, "x": x})
+            tokens.append({"text": normalize(txt), "y": y, "x": x})
 
     if not tokens: return []
 
-    # Group tokens into rows
     tokens.sort(key=lambda t: t["y"])
-    rows = []
-    current = []
-    threshold = 0.01
+    rows, current, threshold = [], [], 0.01
     for tok in tokens:
         if not current or abs(tok["y"] - current[-1]["y"]) < threshold:
             current.append(tok)
@@ -84,7 +85,6 @@ def extract_table(doc):
             current = [tok]
     if current: rows.append(current)
 
-    # Need at least 11 rows (1 header + 10 entries)
     if len(rows) < 11: return []
 
     header_cells = sorted(rows[0], key=lambda t: t["x"])
@@ -95,22 +95,22 @@ def extract_table(doc):
         table.append({headers[i]: cells[i]["text"] if i < len(cells) else "" for i in range(len(headers))})
     return table
 
-# 🖼 Streamlit UI
+# 🖼️ Streamlit App
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
-st.title("🏛️ Registry OCR — Left Half: 3 Forms + Tables")
+st.title("🏛️ Registry OCR — Left Half, Tuned 3-Zone Extraction")
 
-cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
+cred = st.sidebar.file_uploader("🔐 GCP Credentials (.json)", type=["json"])
 if cred:
     with open("credentials.json", "wb") as f: f.write(cred.read())
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
-file = st.file_uploader("📎 Upload Registry Scan", type=["jpg", "jpeg", "png"])
+file = st.file_uploader("📎 Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not file: st.stop()
 
 img_full = Image.open(file)
 img_left = crop_left(img_full)
-zones = split_zones(img_left)
+zones = split_zones_tuned(img_left)
 
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
@@ -120,14 +120,13 @@ all_fields, all_tables = [], []
 
 for i, zone_img in enumerate(zones, start=1):
     st.header(f"📄 Form {i}")
-    st.image(zone_img, caption=f"🧾 Zone {i} (Left Half)", use_column_width=True)
+    st.image(zone_img, caption=f"🧾 Cropped Zone {i} (Left Half)", use_column_width=True)
 
     with st.spinner(f"🔍 Parsing Form {i}..."):
         doc = parse_docai(zone_img.copy(), project_id, processor_id, location)
         fields = extract_fields(doc)
         table = extract_table(doc)
 
-    # Display form
     st.subheader("📋 Form Fields")
     if fields:
         all_fields.extend(fields)
@@ -135,7 +134,6 @@ for i, zone_img in enumerate(zones, start=1):
     else:
         st.warning("⚠️ No form fields detected.")
 
-    # Display table
     st.subheader("🧾 Table")
     if table:
         all_tables.extend(table)
@@ -143,14 +141,14 @@ for i, zone_img in enumerate(zones, start=1):
     else:
         st.warning("⚠️ No table rows detected.")
 
-# 💾 Export data
-st.header("💾 Export Data")
+# 💾 Export
+st.header("💾 Export Combined Data")
 
 forms_df = pd.DataFrame(all_fields)
-st.download_button("📄 Forms CSV", forms_df.to_csv(index=False), "forms.csv", "text/csv")
-st.download_button("📄 Forms JSON", json.dumps(all_fields, indent=2, ensure_ascii=False), "forms.json", "application/json")
+st.download_button("📄 Download All Forms CSV", forms_df.to_csv(index=False), "forms.csv", "text/csv")
+st.download_button("📄 Download All Forms JSON", json.dumps(all_fields, indent=2, ensure_ascii=False), "forms.json", "application/json")
 
 if all_tables:
     tables_df = pd.DataFrame(all_tables)
-    st.download_button("🧾 Tables CSV", tables_df.to_csv(index=False), "tables.csv", "text/csv")
-    st.download_button("🧾 Tables JSON", json.dumps(all_tables, indent=2, ensure_ascii=False), "tables.json", "application/json")
+    st.download_button("🧾 Download All Tables CSV", tables_df.to_csv(index=False), "tables.csv", "text/csv")
+    st.download_button("🧾 Download All Tables JSON", json.dumps(all_tables, indent=2, ensure_ascii=False), "tables.json", "application/json")
