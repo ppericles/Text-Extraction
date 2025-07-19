@@ -6,14 +6,15 @@ import re
 from io import BytesIO
 from collections import defaultdict
 from google.cloud import documentai_v1 as documentai
+from streamlit_drawable_canvas import st_canvas
 
-# Normalize Greek text
+# Normalize text
 def normalize(text):
     if not text: return ""
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Trim whitespace from image
+# Trim whitespace
 def trim_whitespace(image, intensity_threshold=240, buffer=10):
     gray = image.convert("L")
     pixels = gray.load()
@@ -28,12 +29,12 @@ def trim_whitespace(image, intensity_threshold=240, buffer=10):
     right = min(w, right + buffer)
     return image.crop((left, top, right, bottom))
 
-# Crop left half
+# Crop left side
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Fixed slicing with overlap
+# Fixed slicing
 def split_zones_fixed(image, overlap_px):
     w, h = image.size
     thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
@@ -45,16 +46,16 @@ def split_zones_fixed(image, overlap_px):
     zones = [image.crop((0, max(0, t), w, min(h, b))).convert("RGB") for t, b in bounds]
     return zones, bounds
 
-# Preview zone bounds
+# Overlay preview
 def show_zone_overlay(image, bounds, color="red", width=3):
-    overlay = image.copy()
-    draw = ImageDraw.Draw(overlay)
+    preview = image.copy()
+    draw = ImageDraw.Draw(preview)
     for top, bottom in bounds:
         draw.rectangle([(0, top), (image.width, bottom)], outline=color, width=width)
-    return overlay
+    return preview
 
-# Overlay boxes for missing labels
-def overlay_missing_labels(zone_img, missing_labels, learned_map, fallback_map, color="orange"):
+# Draw overlay for missing labels
+def overlay_missing_labels(zone_img, missing_labels, learned_map, fallback_map, custom_map, color="orange"):
     draw = ImageDraw.Draw(zone_img)
     w, h = zone_img.size
     try:
@@ -62,13 +63,13 @@ def overlay_missing_labels(zone_img, missing_labels, learned_map, fallback_map, 
     except:
         font = None
     for label in missing_labels:
-        box = learned_map.get(label, fallback_map.get(label))
+        box = custom_map.get(label) or learned_map.get(label) or fallback_map.get(label)
         if not box: continue
         x, y, bw, bh = box
         x1, y1 = int(x * w), int(y * h)
         x2, y2 = int((x + bw) * w), int((y + bh) * h)
         draw.rectangle([(x1, y1), (x2, y2)], outline=color, width=2)
-        draw.text((x1, y1 - 16), f"Missing: {label}", fill=color, font=font)
+        draw.text((x1, y1 - 16), f"{label}", fill=color, font=font)
     return zone_img
 
 # Document AI parser
@@ -88,7 +89,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract bounding boxes of known fields
+# Learn field boxes from OCR
 def learn_field_positions(doc, target_labels):
     positions = defaultdict(list)
     if not doc or not doc.pages: return positions
@@ -109,7 +110,7 @@ def learn_field_positions(doc, target_labels):
                     positions[label].append((x, y, w, h))
     return positions
 
-# Compute averages from position history
+# Average box positions
 def average_positions(position_dict):
     averages = {}
     for label, boxes in position_dict.items():
@@ -123,7 +124,7 @@ def average_positions(position_dict):
         )
     return averages
 
-# Extract field data
+# Extract fields
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
     extracted = {}
@@ -169,62 +170,13 @@ def extract_fields(doc, target_labels):
         })
         fields.append({"Label": label, **f})
     return fields
-def extract_table(doc):
-    tokens = []
-    for page in doc.pages:
-        for token in page.tokens:
-            txt = token.layout.text_anchor.content or ""
-            box = token.layout.bounding_poly.normalized_vertices
-            y = sum(v.y for v in box) / len(box)
-            x = sum(v.x for v in box) / len(box)
-            tokens.append({"text": normalize(txt), "y": y, "x": x})
-    if not tokens: return []
-    tokens.sort(key=lambda t: t["y"])
-    rows, current, threshold = [], [], 0.01
-    for tok in tokens:
-        if not current or abs(tok["y"] - current[-1]["y"]) < threshold:
-            current.append(tok)
-        else:
-            rows.append(current)
-            current = [tok]
-    if current: rows.append(current)
-    if len(rows) < 2: return []
-    headers = [t["text"] for t in sorted(rows[0], key=lambda t: t["x"])]
-    table = []
-    for row in rows[1:]:
-        cells = sorted(row, key=lambda t: t["x"])
-        table.append({headers[i]: cells[i]["text"] if i < len(cells) else "" for i in range(len(headers))})
-    return table
-
-MONTH_MAP_GR = {
-    "ΙΑΝΟΥΑΡΙΟΥ": "01", "ΙΑΝ": "01", "ΦΕΒΡΟΥΑΡΙΟΥ": "02", "ΦΕΒ": "02",
-    "ΜΑΡΤΙΟΥ": "03", "ΜΑΡ": "03", "ΑΠΡΙΛΙΟΥ": "04", "ΑΠΡ": "04",
-    "ΜΑΪΟΥ": "05", "ΜΑΪ": "05", "ΙΟΥΝΙΟΥ": "06", "ΙΟΥΝ": "06",
-    "ΙΟΥΛΙΟΥ": "07", "ΙΟΥΛ": "07", "ΑΥΓΟΥΣΤΟΥ": "08", "ΑΥΓ": "08",
-    "ΣΕΠΤΕΜΒΡΙΟΥ": "09", "ΣΕΠ": "09", "ΟΚΤΩΒΡΙΟΥ": "10", "ΟΚΤ": "10",
-    "ΝΟΕΜΒΡΙΟΥ": "11", "ΝΟΕ": "11", "ΔΕΚΕΜΒΡΙΟΥ": "12", "ΔΕΚ": "12"
-}
-
-def convert_greek_month_dates(doc):
-    dates = []
-    if not doc or not doc.pages: return dates
-    for page in doc.pages:
-        for token in page.tokens:
-            txt = token.layout.text_anchor.content or ""
-            match = re.search(r"(\d{1,2})\s+([Α-ΩΪΫ]{3,})\s+(\d{2,4})", normalize(txt))
-            if match:
-                d, m, y = match.groups()
-                m_num = MONTH_MAP_GR.get(m.upper())
-                if m_num:
-                    dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
-    return sorted(set(dates))
-
-# UI Layout
+# UI setup
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
-st.title("🏛️ Registry OCR — Adaptive Overlays with Fallbacks")
+st.title("🏛️ Registry OCR — Manual Calibration & Adaptive Overlay")
 
 overlap = st.sidebar.slider("🧩 Overlap between zones", 0, 120, 60, 10)
 show_overlay = st.sidebar.checkbox("🟧 Show missing field overlays", value=True)
+calibrate_mode = st.sidebar.checkbox("🎯 Calibrate label positions manually")
 cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred:
     with open("credentials.json", "wb") as f: f.write(cred.read())
@@ -236,6 +188,7 @@ if not file:
     st.info("ℹ️ Upload an image to begin")
     st.stop()
 
+# Preprocessing
 image = Image.open(file)
 trimmed = trim_whitespace(image)
 img_left = crop_left(trimmed)
@@ -244,14 +197,15 @@ zones, bounds = split_zones_fixed(img_left, overlap_px=overlap)
 preview = show_zone_overlay(img_left, bounds)
 st.image(preview, caption="📐 Zone Preview", use_container_width=True)
 
+# Registry OCR parameters
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
-
 target_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"
 ]
 
+# Fallback positions
 fallback_regions = {
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ": (0.05, 0.06, 0.4, 0.08),
     "ΕΠΩΝΥΜΟΝ":         (0.05, 0.16, 0.4, 0.07),
@@ -260,6 +214,9 @@ fallback_regions = {
     "ΚΥΡΙΟΝ ΟΝΟΜΑ":     (0.05, 0.43, 0.4, 0.07)
 }
 
+# Calibration override storage
+custom_positions = {}
+
 parsed_forms = []
 learned_field_positions = defaultdict(list)
 
@@ -267,6 +224,7 @@ for i, zone_img in enumerate(zones, start=1):
     st.header(f"📄 Form {i}")
     doc = parse_docai(zone_img.copy(), project_id, processor_id, location)
     if not doc: continue
+
     fields = extract_fields(doc, target_labels)
     table = extract_table(doc)
     dates = convert_greek_month_dates(doc)
@@ -282,9 +240,39 @@ for i, zone_img in enumerate(zones, start=1):
     st.markdown(f"✅ Found: `{', '.join(found_labels)}`")
     st.markdown(f"❌ Missing: `{', '.join(missing_labels)}`")
 
+    # Optional manual calibration
+    if calibrate_mode:
+        st.subheader("🎯 Draw bounding boxes for missing labels")
+        canvas_result = st_canvas(
+            background_image=zone_img,
+            update_streamlit=True,
+            height=zone_img.height,
+            width=zone_img.width,
+            drawing_mode="rect",
+            stroke_color="orange",
+            key="canvas_" + str(i)
+        )
+
+        if canvas_result.json_data:
+            for obj in canvas_result.json_data["objects"]:
+                label = obj.get("label") or "UNLABELED"
+                x = obj["left"] / zone_img.width
+                y = obj["top"] / zone_img.height
+                w = obj["width"] / zone_img.width
+                h = obj["height"] / zone_img.height
+                custom_positions[label] = (x, y, w, h)
+            st.success(f"✅ {len(canvas_result.json_data['objects'])} custom boxes captured")
+
+    # Overlay if enabled
     learned_avg = average_positions(learned_field_positions)
     if show_overlay and missing_labels:
-        zone_img = overlay_missing_labels(zone_img.copy(), missing_labels, learned_avg, fallback_regions)
+        zone_img = overlay_missing_labels(
+            zone_img.copy(),
+            missing_labels,
+            learned_avg,
+            fallback_regions,
+            custom_positions
+        )
 
     st.image(zone_img, caption=f"🧾 Zone {i}", use_container_width=True)
 
@@ -306,9 +294,8 @@ for i, zone_img in enumerate(zones, start=1):
         st.subheader("📅 Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
 
-# Export block
+# Export
 st.header("💾 Export Data")
-
 flat_fields, flat_tables, flat_dates = [], [], []
 for form in parsed_forms:
     flat_fields.extend([{"Form": form["Form"], **field} for field in form["Fields"]])
