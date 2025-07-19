@@ -6,7 +6,7 @@ import re
 from io import BytesIO
 from google.cloud import documentai_v1 as documentai
 
-# 🔠 Normalize Greek text
+# 🔠 Normalize Greek text (accent-free uppercase)
 def normalize(text):
     if not text: return ""
     text = unicodedata.normalize("NFD", text)
@@ -17,10 +17,10 @@ def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# 📐 Tuned vertical slicing (manually defined)
+# 📐 Tuned vertical slicing (3 calibrated zones)
 def split_zones_tuned(image):
     w, h = image.size
-    boundaries = [(0.00, 0.32), (0.33, 0.65), (0.66, 1.00)]  # Adjust as needed
+    boundaries = [(0.00, 0.32), (0.33, 0.65), (0.66, 1.00)]
     zones = []
     for top_pct, bottom_pct in boundaries:
         top = int(h * top_pct)
@@ -28,7 +28,7 @@ def split_zones_tuned(image):
         zones.append(image.crop((0, top, w, bottom)).convert("RGB"))
     return zones
 
-# 🔍 Document AI parsing
+# 🔍 Send image to Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -45,34 +45,35 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# 📋 Form fields
-def extract_fields(doc):
+# 📋 Extract only desired form fields
+def extract_fields(doc, target_labels):
     fields = []
     if not doc or not doc.pages: return fields
     for page in doc.pages:
         for f in page.form_fields:
             label = f.field_name.text_anchor.content or ""
             value = f.field_value.text_anchor.content or ""
-            conf = round(f.field_value.confidence * 100, 2)
-            fields.append({
-                "Label": label.strip(),
-                "Raw": value.strip(),
-                "Corrected": normalize(value),
-                "Confidence": conf,
-                "Schema": normalize(label)
-            })
+            if label.strip() in target_labels:
+                conf = round(f.field_value.confidence * 100, 2)
+                fields.append({
+                    "Label": label.strip(),
+                    "Raw": value.strip(),
+                    "Corrected": normalize(value),
+                    "Confidence": conf,
+                    "Schema": normalize(label)
+                })
     return fields
 
-# 📊 Table extraction
+# 📊 Reconstruct table from token geometry
 def extract_table(doc):
     tokens = []
     for page in doc.pages:
         for token in page.tokens:
-            txt = token.layout.text_anchor.content or ""
+            text = token.layout.text_anchor.content or ""
             box = token.layout.bounding_poly.normalized_vertices
             y = sum(v.y for v in box) / len(box)
             x = sum(v.x for v in box) / len(box)
-            tokens.append({"text": normalize(txt), "y": y, "x": x})
+            tokens.append({"text": normalize(text), "y": y, "x": x})
     if not tokens: return []
 
     tokens.sort(key=lambda t: t["y"])
@@ -94,20 +95,20 @@ def extract_table(doc):
         table.append({headers[i]: cells[i]["text"] if i < len(cells) else "" for i in range(len(headers))})
     return table
 
-# 📅 Greek month → number map
+# 📅 Greek month mapping
 MONTH_MAP_GR = {
-    "ΙΑΝΟΥΑΡΙΟΣ": "01", "ΙΑΝΟΥΑΡΙΟΥ": "01", "ΙΑΝ": "01",
-    "ΦΕΒΡΟΥΑΡΙΟΣ": "02", "ΦΕΒΡΟΥΑΡΙΟΥ": "02", "ΦΕΒ": "02",
-    "ΜΑΡΤΙΟΣ": "03", "ΜΑΡΤΙΟΥ": "03", "ΜΑΡ": "03",
-    "ΑΠΡΙΛΙΟΣ": "04", "ΑΠΡΙΛΙΟΥ": "04", "ΑΠΡ": "04",
-    "ΜΑΙΟΣ": "05", "ΜΑΪΟΥ": "05", "ΜΑΪ": "05",
-    "ΙΟΥΝΙΟΣ": "06", "ΙΟΥΝΙΟΥ": "06", "ΙΟΥΝ": "06",
-    "ΙΟΥΛΙΟΣ": "07", "ΙΟΥΛΙΟΥ": "07", "ΙΟΥΛ": "07",
-    "ΑΥΓΟΥΣΤΟΣ": "08", "ΑΥΓΟΥΣΤΟΥ": "08", "ΑΥΓ": "08",
-    "ΣΕΠΤΕΜΒΡΙΟΣ": "09", "ΣΕΠΤΕΜΒΡΙΟΥ": "09", "ΣΕΠ": "09",
-    "ΟΚΤΩΒΡΙΟΣ": "10", "ΟΚΤΩΒΡΙΟΥ": "10", "ΟΚΤ": "10",
-    "ΝΟΕΜΒΡΙΟΣ": "11", "ΝΟΕΜΒΡΙΟΥ": "11", "ΝΟΕ": "11",
-    "ΔΕΚΕΜΒΡΙΟΣ": "12", "ΔΕΚΕΜΒΡΙΟΥ": "12", "ΔΕΚ": "12"
+    "ΙΑΝΟΥΑΡΙΟΥ": "01", "ΙΑΝ": "01",
+    "ΦΕΒΡΟΥΑΡΙΟΥ": "02", "ΦΕΒ": "02",
+    "ΜΑΡΤΙΟΥ": "03", "ΜΑΡ": "03",
+    "ΑΠΡΙΛΙΟΥ": "04", "ΑΠΡ": "04",
+    "ΜΑΪΟΥ": "05", "ΜΑΪ": "05",
+    "ΙΟΥΝΙΟΥ": "06", "ΙΟΥΝ": "06",
+    "ΙΟΥΛΙΟΥ": "07", "ΙΟΥΛ": "07",
+    "ΑΥΓΟΥΣΤΟΥ": "08", "ΑΥΓ": "08",
+    "ΣΕΠΤΕΜΒΡΙΟΥ": "09", "ΣΕΠ": "09",
+    "ΟΚΤΩΒΡΙΟΥ": "10", "ΟΚΤ": "10",
+    "ΝΟΕΜΒΡΙΟΥ": "11", "ΝΟΕ": "11",
+    "ΔΕΚΕΜΒΡΙΟΥ": "12", "ΔΕΚ": "12"
 }
 
 def convert_greek_month_dates(doc):
@@ -118,68 +119,66 @@ def convert_greek_month_dates(doc):
             text = token.layout.text_anchor.content or ""
             match = re.search(r"(\d{1,2})\s+([Α-ΩΪΫ]{3,})\s+(\d{2,4})", normalize(text))
             if match:
-                day, month_name, year = match.groups()
-                month_num = MONTH_MAP_GR.get(month_name.upper())
-                if month_num:
-                    dates.append(f"{day.zfill(2)}/{month_num}/{year.zfill(4)}")
+                d, m, y = match.groups()
+                m_num = MONTH_MAP_GR.get(m.upper())
+                if m_num:
+                    dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
     return sorted(set(dates))
 
 # 🖼️ Streamlit UI
-st.set_page_config(layout="wide", page_title="Greek Registry Parser")
-st.title("🏛️ Registry OCR — Left Half (3 Calibrated Zones)")
+st.set_page_config(layout="wide", page_title="Registry OCR Parser")
+st.title("🏛️ Greek Registry Parser — Specific Field & Table Extraction")
 
-cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
+cred = st.sidebar.file_uploader("🔐 GCP Credentials (.json)", type=["json"])
 if cred:
     with open("credentials.json", "wb") as f: f.write(cred.read())
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
-file = st.file_uploader("📎 Upload Registry Image", type=["jpg", "jpeg", "png"])
+file = st.file_uploader("📎 Upload Registry Scan", type=["jpg", "jpeg", "png"])
 if not file: st.stop()
 
 img = Image.open(file)
-left_img = crop_left(img)
-zones = split_zones_tuned(left_img)
+img_left = crop_left(img)
+zones = split_zones_tuned(img_left)
 
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
+target_labels = ["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ"]
 
 all_fields, all_tables, all_dates = [], [], []
 
 for i, zone_img in enumerate(zones, start=1):
     st.header(f"📄 Form {i}")
-    st.image(zone_img, caption=f"🧾 Zone {i} (Left Half)", use_column_width=True)
+    st.image(zone_img, caption=f"🧾 Zone {i}", use_column_width=True)
     doc = parse_docai(zone_img.copy(), project_id, processor_id, location)
     if not doc: continue
 
-    fields = extract_fields(doc)
+    fields = extract_fields(doc, target_labels)
     table = extract_table(doc)
     dates = convert_greek_month_dates(doc)
 
     if fields:
         all_fields.extend(fields)
-        st.subheader("📋 Form Fields")
+        st.subheader("📋 Specific Form Fields")
         st.dataframe(pd.DataFrame(fields), use_container_width=True)
     else:
-        st.warning("⚠️ No form fields detected.")
+        st.warning("⚠️ Targeted fields not found.")
 
     if table:
         all_tables.extend(table)
         st.subheader("🧾 Table")
         st.dataframe(pd.DataFrame(table), use_container_width=True)
     else:
-        st.warning("⚠️ No table data detected.")
+        st.warning("⚠️ Table rows not detected.")
 
     if dates:
         all_dates.extend(dates)
-        st.subheader("📅 Greek Date Conversion")
+        st.subheader("📅 Greek Month Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
     else:
         st.info("ℹ️ No Greek-style dates found.")
-
-# 💾 Export Section
-st.header("💾 Export Combined Data")
 
 forms_df = pd.DataFrame(all_fields)
 st.download_button("📄 Download Forms CSV", forms_df.to_csv(index=False), "forms.csv", "text/csv")
@@ -191,6 +190,6 @@ if all_tables:
     st.download_button("🧾 Download Tables JSON", json.dumps(all_tables, indent=2, ensure_ascii=False), "tables.json", "application/json")
 
 if all_dates:
-    dates_df = pd.DataFrame(sorted(set(all_dates)), columns=["Date"])
+    dates_df = pd.DataFrame(sorted(set(all_dates)), columns=["Standardized Date"])
     st.download_button("📅 Download Greek Dates CSV", dates_df.to_csv(index=False), "dates.csv", "text/csv")
     st.download_button("📅 Download Greek Dates JSON", json.dumps(sorted(set(all_dates)), indent=2, ensure_ascii=False), "dates.json", "application/json")
