@@ -26,22 +26,24 @@ def trim_whitespace(image, threshold=240, buffer=10):
     right = next((x for x in reversed(range(w)) if any(pixels[x, y] < threshold for y in range(h))), w)
     return image.crop((max(0, left - buffer), max(0, top - buffer), min(w, right + buffer), min(h, bottom + buffer)))
 
-# Crop left half of the registry
+# Crop left side of registry
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Split into vertical zones
+# Split image vertically into overlapping zones
 def split_zones_fixed(image, overlap_px):
     w, h = image.size
     thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
     bounds = [(thirds[0], thirds[1] + overlap_px), (thirds[1] - overlap_px, thirds[2] + overlap_px), (thirds[2] - overlap_px, thirds[3])]
     return [image.crop((0, t, w, b)) for t, b in bounds], bounds
 
-# Parse document using Google Document AI
+# Parse with Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
-        client = documentai.DocumentProcessorServiceClient(client_options={"api_endpoint": f"{location}-documentai.googleapis.com"})
+        client = documentai.DocumentProcessorServiceClient(
+            client_options={"api_endpoint": f"{location}-documentai.googleapis.com"}
+        )
         name = client.processor_path(project_id, location, processor_id)
         buf = BytesIO()
         pil_img.save(buf, format="JPEG")
@@ -51,7 +53,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Fallback OCR using Google Vision
+# Fallback OCR from bounding boxes using Google Vision
 def extract_field_from_box_with_vision(pil_img, box):
     w, h = pil_img.size
     x, y, bw, bh = box
@@ -131,10 +133,10 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # Populate fields + fallback
+    # Populate final field list
     fields = []
     for label in target_labels:
-        if label in extracted:
+        if label in extracted and extracted[label]["Raw"].strip():
             fields.append({
                 "Label": label,
                 "Raw": extracted[label]["Raw"],
@@ -160,8 +162,8 @@ for idx, zone in enumerate(zones, start=1):
         "Fields": fields,
         "Missing": [f["Label"] for f in fields if not f["Raw"].strip()]
     })
-# 📦 Final Export Options
-st.header("📤 Export Parsed Fields")
+# 📤 Export Section
+st.header("📦 Export Parsed Field Data")
 
 flat_fields = []
 for form in forms_parsed:
@@ -176,19 +178,31 @@ for form in forms_parsed:
 
 df = pd.DataFrame(flat_fields)
 
-st.download_button("📄 Download as CSV", df.to_csv(index=False), file_name="parsed_fields.csv", mime="text/csv")
-st.download_button("📄 Download as JSON", json.dumps(flat_fields, indent=2, ensure_ascii=False), file_name="parsed_fields.json", mime="application/json")
+st.download_button(
+    "📄 Download as CSV",
+    data=df.to_csv(index=False),
+    file_name="registry_fields.csv",
+    mime="text/csv"
+)
 
-# 📊 Parsing Summary
+st.download_button(
+    "📄 Download as JSON",
+    data=json.dumps(flat_fields, indent=2, ensure_ascii=False),
+    file_name="registry_fields.json",
+    mime="application/json"
+)
+
+# 📊 Summary Overview
 st.header("📊 Summary Report")
 
 valid_forms = [f for f in forms_parsed if not f["Missing"]]
 invalid_forms = [f for f in forms_parsed if f["Missing"]]
 
-st.markdown(f"✅ Forms with all fields: **{len(valid_forms)}**")
+st.markdown(f"✅ Forms fully parsed: **{len(valid_forms)}**")
 st.markdown(f"❌ Forms with missing fields: **{len(invalid_forms)}**")
 
 if invalid_forms:
-    st.subheader("❌ Missing Fields by Form")
+    st.subheader("🚨 Missing Fields Breakdown")
     for f in invalid_forms:
-        st.markdown(f"- **Form {f['Form']}** → Missing: `{', '.join(f['Missing'])}`")
+        missing_list = ", ".join(f["Missing"])
+        st.markdown(f"- **Form {f['Form']}** → Missing: `{missing_list}`")
