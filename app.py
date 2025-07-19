@@ -47,7 +47,6 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# 🧠 Smart confidence estimator
 def estimate_confidence(label, text):
     text = text.strip()
     if not text: return 0.0
@@ -56,9 +55,8 @@ def estimate_confidence(label, text):
     elif label in ["ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"]:
         is_greekish = re.match(r"^[Α-ΩΆΈΉΊΌΎΏα-ωάέήίόύώ\s\-]{3,}$", text)
         return 75.0 if is_greekish else 30.0
-    return 50.0  # Generic fallback
+    return 50.0  # Fallback
 
-# 🔍 Vision OCR with heuristics
 def extract_field_from_box_with_vision(pil_img, box, label):
     try:
         x, y, bw, bh = box
@@ -69,7 +67,7 @@ def extract_field_from_box_with_vision(pil_img, box, label):
     w, h = pil_img.size
     x1, y1 = int(x * w), int(y * h)
     x2, y2 = int((x + bw) * w), int((y + bh) * h)
-    cropped = pil_img.crop((x1, y1, x2, y2))
+    cropped = pil_img.crop((x1, y1, x2, y2)).convert("RGB")  # ✅ RGB fix
     buf = BytesIO()
     cropped.save(buf, format="JPEG")
     buf.seek(0)
@@ -156,7 +154,6 @@ for idx, zone in enumerate(zones, start=1):
         key=f"editor_{idx}"
     )
 
-    # Capture editor results
     manual_boxes_per_form[str(idx)] = {}
     for _, row in box_editor.iterrows():
         label = row["Label"]
@@ -164,7 +161,7 @@ for idx, zone in enumerate(zones, start=1):
         if all(val is not None for val in (x, y, w, h)):
             manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
 
-    # Overlay visualization
+    # 🟣 Overlay fallback boxes
     if manual_boxes_per_form[str(idx)]:
         overlay = zone.copy()
         draw = ImageDraw.Draw(overlay)
@@ -187,7 +184,7 @@ for idx, zone in enumerate(zones, start=1):
                 continue
         st.image(overlay, caption="🟣 Defined Fallback Boxes", use_container_width=True)
 
-    # Document AI parse
+    # 🔍 Parse with Document AI
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     if not doc: continue
 
@@ -205,7 +202,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # Combine with fallback + smart confidence
+    # 🩹 Merge AI results with fallback recovery
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"]:
@@ -233,7 +230,7 @@ for idx, zone in enumerate(zones, start=1):
         "Fields": fields,
         "Missing": [f["Label"] for f in fields if not f["Raw"].strip()]
     })
-# 📦 Export Parsed Fields
+# 📤 Export Parsed Field Data
 st.header("📤 Export Parsed Field Data")
 
 flat_fields = []
@@ -278,15 +275,16 @@ if invalid_forms:
         missing_list = ", ".join(f["Missing"])
         st.markdown(f"- **Form {f['Form']}** → Missing: `{missing_list}`")
 
-# 🧠 Confidence Heatmap (Optional Insight)
+# 📈 Confidence Overview
 st.header("📈 Confidence Overview")
 
-avg_confidence = df["Confidence"].mean()
-st.markdown(f"📌 Average confidence across all fields: **{round(avg_confidence, 2)}%**")
-
+avg_conf = round(df["Confidence"].mean(), 2)
 low_conf_fields = df[df["Confidence"] < 50.0]
+
+st.markdown(f"📌 Average confidence across all fields: **{avg_conf}%**")
+
 if not low_conf_fields.empty:
-    st.subheader("🔍 Fields with Low Confidence (< 50%)")
+    st.subheader("🔍 Low Confidence Fields (< 50%)")
     st.dataframe(low_conf_fields, use_container_width=True)
 
 # 💾 Export Fallback Box Layouts
