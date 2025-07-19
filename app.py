@@ -12,33 +12,21 @@ def normalize(text):
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Smart match between OCR label and target
-def match_label(text, targets):
-    norm_text = normalize(text)
-    for target in targets:
-        norm_target = normalize(target)
-        if norm_target in norm_text or norm_text in norm_target:
-            return target
-    return None
-
-# Crop image to left half
+# Crop to left half of image
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Split image into 3 zones with overlap
+# Split into vertical zones with overlap
 def split_zones(image, overlap=60):
     w, h = image.size
-    third = h // 3
-    boundaries = [
-        (0, third + overlap),
-        (third - overlap, 2 * third + overlap),
-        (2 * third - overlap, h)
+    one_third = h // 3
+    bounds = [
+        (0, one_third + overlap),
+        (one_third - overlap, 2 * one_third + overlap),
+        (2 * one_third - overlap, h)
     ]
-    zones = []
-    for top, bottom in boundaries:
-        zones.append(image.crop((0, max(0, top), w, min(h, bottom))).convert("RGB"))
-    return zones
+    return [image.crop((0, max(0, t), w, min(h, b))).convert("RGB") for t, b in bounds]
 
 # Send image to Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
@@ -57,51 +45,49 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract fields with confidence and flexible label merging
+# Extract target fields with confidence scores
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
 
     extracted = {}
-    collected = []
+    raw_items = []
     for page in doc.pages:
         for f in page.form_fields:
-            label = f.field_name.text_anchor.content or ""
-            value = f.field_value.text_anchor.content or ""
+            lbl = f.field_name.text_anchor.content or ""
+            val = f.field_value.text_anchor.content or ""
             conf = round(f.field_value.confidence * 100, 2)
-            collected.append({"Label": label.strip(), "Value": value.strip(), "Confidence": conf})
+            raw_items.append({"Label": lbl.strip(), "Value": val.strip(), "Confidence": conf})
 
     i = 0
-    while i < len(collected):
-        label = collected[i]["Label"]
-        value = collected[i]["Value"]
-        conf = collected[i]["Confidence"]
+    while i < len(raw_items):
+        label = raw_items[i]["Label"]
+        value = raw_items[i]["Value"]
+        conf = raw_items[i]["Confidence"]
         merged_label = label
         merged_value = value
         merged_conf = conf
-        matched_target = match_label(merged_label, target_labels)
 
-        for j in range(i + 1, len(collected)):
-            merged_label += " " + collected[j]["Label"]
-            merged_value += " " + collected[j]["Value"]
-            merged_conf = round((merged_conf + collected[j]["Confidence"]) / 2, 2)
-            matched_target = match_label(merged_label, target_labels)
-            if merged_value.strip() and matched_target:
-                extracted[matched_target] = {
+        for j in range(i + 1, len(raw_items)):
+            merged_label += " " + raw_items[j]["Label"]
+            merged_value += " " + raw_items[j]["Value"]
+            merged_conf = round((merged_conf + raw_items[j]["Confidence"]) / 2, 2)
+
+            if normalize(merged_label).strip() in [normalize(t) for t in target_labels]:
+                extracted[merged_label.strip()] = {
                     "Raw": merged_value.strip(),
                     "Corrected": normalize(merged_value),
                     "Confidence": merged_conf,
-                    "Schema": normalize(matched_target)
+                    "Schema": normalize(merged_label)
                 }
                 i = j
                 break
         else:
-            matched_target = match_label(label, target_labels)
-            if matched_target:
-                extracted[matched_target] = {
+            if label in target_labels:
+                extracted[label] = {
                     "Raw": value.strip(),
                     "Corrected": normalize(value),
                     "Confidence": conf,
-                    "Schema": normalize(matched_target)
+                    "Schema": normalize(label)
                 }
         i += 1
 
@@ -164,7 +150,7 @@ def convert_greek_month_dates(doc):
                     dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
     return sorted(set(dates))
 
-# 🖼️ Streamlit UI
+# Streamlit App UI
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
 st.title("🏛️ Registry OCR — Validated Extraction")
 
@@ -200,19 +186,26 @@ for i, zone_img in enumerate(zones, start=1):
     fields = extract_fields(doc, target_labels)
     table = extract_table(doc)
     dates = convert_greek_month_dates(doc)
-    missing = [f["Label"] for f in fields if f["Raw"] == ""]
-    valid = len(missing) == 0
+
+    found_labels = [f["Label"] for f in fields if f["Raw"].strip()]
+    missing_labels = [label for label in target_labels if label not in found_labels]
+
+    st.subheader("🕵️ Field Label Report")
+    st.markdown(f"✅ Found: `{', '.join(found_labels)}`")
+    st.markdown(f"❌ Missing: `{', '.join(missing_labels)}`")
 
     parsed_forms.append({
-        "Form": i, "Valid": valid,
-        "Missing": missing, "Fields": fields,
-        "Table": table, "Dates": dates
+        "Form": i,
+        "Valid": len(missing_labels) == 0,
+        "Missing": missing_labels,
+        "Fields": fields,
+        "Table": table,
+        "Dates": dates
     })
 
     st.subheader("📋 Form Fields")
     st.dataframe(pd.DataFrame(fields), use_container_width=True)
-    if not valid:
-        st.error(f"❌ Missing: {', '.join(missing)}")
+
     if table:
         st.subheader("🧾 Table")
         st.dataframe(pd.DataFrame(table), use_container_width=True)
@@ -220,7 +213,7 @@ for i, zone_img in enumerate(zones, start=1):
         st.subheader("📅 Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
 
-# 💾 Final Export
+# Export Block
 st.header("💾 Export Data")
 
 flat_fields, flat_tables, flat_dates = [], [], []
