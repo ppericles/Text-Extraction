@@ -59,22 +59,21 @@ def estimate_confidence(label, text):
 
 def extract_field_from_box_with_vision(pil_img, box, label):
     try:
-        x, y, bw, bh = box
-        if None in (x, y, bw, bh):
-            st.warning(f"⚠️ Skipping '{label}' — box contains None: {box}")
-            return "", 0.0
-    except Exception:
-        st.warning(f"⚠️ Skipping '{label}' — invalid box format: {box}")
+        x, y, bw, bh = [float(v) for v in box]
+        if any(val is None for val in (x, y, bw, bh)):
+            raise ValueError("Box contains None")
+    except Exception as e:
+        st.warning(f"⚠️ Invalid box values for '{label}': {box} — {e}")
         return "", 0.0
 
     w, h = pil_img.size
     try:
-        x1 = int(float(x) * w)
-        y1 = int(float(y) * h)
-        x2 = int(float(x + bw) * w)
-        y2 = int(float(y + bh) * h)
+        x1 = int(x * w)
+        y1 = int(y * h)
+        x2 = int((x + bw) * w)
+        y2 = int((y + bh) * h)
     except Exception as e:
-        st.warning(f"⚠️ Invalid box values for '{label}': {box} — {e}")
+        st.warning(f"⚠️ Could not compute crop for '{label}': {box} — {e}")
         return "", 0.0
 
     zone_rgb = pil_img.convert("RGB")
@@ -118,7 +117,6 @@ if uploaded_box_map:
     except Exception as e:
         st.sidebar.error(f"📛 Failed to load box map: {e}")
 
-# 📏 Normalization toggle
 normalize_input = st.checkbox("📏 Normalize pixel box map automatically", value=True)
 
 uploaded_image = st.file_uploader("🖼️ Upload Registry Image", type=["jpg", "jpeg", "png"])
@@ -126,13 +124,12 @@ if not uploaded_image:
     st.info("ℹ️ Please upload a registry image to continue.")
     st.stop()
 
-# Preprocess image
+# Preprocessing
 original = Image.open(uploaded_image)
 cropped = crop_left(trim_whitespace(original))
 zones, bounds = split_zones_fixed(cropped, overlap)
 st.image(cropped, caption="🖼️ Trimmed Registry (Left Side)", use_container_width=True)
 
-# AI setup
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
@@ -142,12 +139,12 @@ target_labels = [
 
 forms_parsed = []
 
-# Zone loop
+# Loop through zones
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     zone_width, zone_height = zone.size
 
-    # Prefill fallback table
+    # Prefill fallback box editor
     existing = manual_boxes_per_form.get(str(idx), {})
     prefill_rows = []
     for label in target_labels:
@@ -175,7 +172,7 @@ for idx, zone in enumerate(zones, start=1):
         key=f"editor_{idx}"
     )
 
-    # Store updated fallback boxes
+    # Store updated boxes
     manual_boxes_per_form[str(idx)] = {}
     for _, row in box_editor.iterrows():
         label = row["Label"]
@@ -183,7 +180,7 @@ for idx, zone in enumerate(zones, start=1):
         if all(val is not None for val in (x, y, w, h)):
             manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
 
-    # 🟣 Always attempt bounding box overlay
+    # Overlay fallback boxes
     overlay = zone.copy()
     draw = ImageDraw.Draw(overlay)
     w, h = overlay.size
@@ -197,15 +194,17 @@ for idx, zone in enumerate(zones, start=1):
             x, y, bw, bh = [float(v) for v in box]
             if any(val is None for val in (x, y, bw, bh)):
                 raise ValueError("Box contains None")
-            x1, y1 = int(x * w), int(y * h)
-            x2, y2 = int((x + bw) * w), int((y + bh) * h)
+            x1 = int(x * w)
+            y1 = int(y * h)
+            x2 = int((x + bw) * w)
+            y2 = int((y + bh) * h)
             draw.rectangle([(x1, y1), (x2, y2)], outline="purple", width=2)
             draw.text((x1, y1 - 16), label, fill="purple", font=font or None)
         except Exception as e:
             st.warning(f"⚠️ Skipping '{label}' — {e}")
     st.image(overlay, caption=f"🟣 Fallback Boxes for Form {idx}", use_container_width=True)
 
-    # 🔍 Document AI parse
+    # Document AI parse
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     if not doc:
         st.error(f"❌ No Document AI result for Form {idx}")
@@ -225,7 +224,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # 🩹 Merge with fallback Vision OCR
+    # Merge AI & fallback
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"]:
@@ -295,8 +294,8 @@ st.markdown(f"❌ Forms with missing fields: **{len(invalid_forms)}**")
 if invalid_forms:
     st.subheader("🚨 Missing Fields Breakdown")
     for f in invalid_forms:
-        missing_list = ", ".join(f["Missing"])
-        st.markdown(f"- **Form {f['Form']}** → Missing: `{missing_list}`")
+        missing = ", ".join(f["Missing"])
+        st.markdown(f"- **Form {f['Form']}** → Missing: `{missing}`")
 
 # 📈 Confidence Overview
 st.header("📈 Confidence Overview")
@@ -310,7 +309,7 @@ if not df.empty:
         st.subheader("🔍 Fields with Low Confidence (< 50%)")
         st.dataframe(low_conf_fields, use_container_width=True)
 else:
-    st.markdown("⚠️ No field data parsed yet.")
+    st.markdown("⚠️ No field data available to summarize.")
 
 # 💾 Fallback Box Layout Export
 if manual_boxes_per_form:
