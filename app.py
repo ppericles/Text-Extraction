@@ -1,4 +1,4 @@
-# 📜 Greek Registry Parser — Full Application
+# 📜 Greek Registry Parser — Part 1: Utilities and Setup
 
 import streamlit as st
 import os, json, re, unicodedata
@@ -9,10 +9,7 @@ import pandas as pd
 from google.cloud import documentai_v1 as documentai
 from google.cloud import vision
 
-# ---------------------------
-# 🔧 Utility Functions
-# ---------------------------
-
+# 🔠 Character Fixers
 def fix_latin_greek(text):
     return "".join({
         "A": "Α", "B": "Β", "E": "Ε", "H": "Η", "K": "Κ", "M": "Μ",
@@ -25,6 +22,7 @@ def fix_cyrillic_greek(text):
         "К": "Κ", "М": "Μ", "О": "Ο", "Р": "Ρ", "Т": "Τ", "Х": "Χ"
     }.get(c, c) for c in text)
 
+# 🧹 Text Normalization
 def normalize(text):
     if not text:
         return ""
@@ -34,6 +32,7 @@ def normalize(text):
     text = re.sub(r"[^\w\sΑ-ΩάέήίόύώΆΈΉΊΌΎΏ]", "", text)
     return text.upper().strip()
 
+# 📅 Standardize date to DD/MM/YYYY
 def normalize_date(text):
     text = text.strip()
     for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d/%m/%y", "%d-%m-%y"]:
@@ -43,13 +42,13 @@ def normalize_date(text):
             continue
     return text
 
+# 🧠 Field Validation Rules
 def validate_registry_field(label, corrected_text, confidence):
     issues = []
-    is_numeric = label == "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"
     greek_chars = re.findall(r"[Α-ΩΆΈΉΊΌΎΏα-ωάέήίόύώ]", corrected_text or "")
     if not corrected_text:
         issues.append("Missing")
-    if not is_numeric and len(greek_chars) < max(3, len(corrected_text) // 2):
+    if label != "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ" and len(greek_chars) < max(3, len(corrected_text)//2):
         issues.append("Non-Greek characters")
     if len(corrected_text) < 2:
         issues.append("Too short")
@@ -57,6 +56,7 @@ def validate_registry_field(label, corrected_text, confidence):
         issues.append("Low confidence")
     return issues
 
+# 💡 Suggest Fixes
 def suggest_fix(label, corrected_text, issues):
     if "Too short" in issues or "Non-Greek characters" in issues:
         fixed = corrected_text.title()
@@ -64,6 +64,7 @@ def suggest_fix(label, corrected_text, issues):
             return fixed
     return None
 
+# ✂️ Crop Whitespace
 def trim_whitespace(image, threshold=240, buffer=10):
     gray = image.convert("L")
     pixels = gray.load()
@@ -72,18 +73,23 @@ def trim_whitespace(image, threshold=240, buffer=10):
     bottom = next((y for y in reversed(range(h)) if any(pixels[x, y] < threshold for x in range(w))), h)
     left = next((x for x in range(w) if any(pixels[x, y] < threshold for y in range(h))), 0)
     right = next((x for x in reversed(range(w)) if any(pixels[x, y] < threshold for y in range(h))), w)
-    return image.crop((max(0, left - buffer), max(0, top - buffer), min(w, right + buffer), min(h, bottom + buffer)))
+    return image.crop((max(0, left-buffer), max(0, top-buffer), min(w, right+buffer), min(h, bottom+buffer)))
 
+# ✂️ Crop Left Half
 def crop_left(image):
     w, h = image.size
-    return image.convert("RGB").crop((0, 0, w // 2, h))
+    return image.convert("RGB").crop((0, 0, w//2, h))
 
+# ✂️ Vertical Zone Split
 def split_zones_fixed(image, overlap_px):
     w, h = image.size
     thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
-    bounds = [(thirds[0], thirds[1] + overlap_px), (thirds[1] - overlap_px, thirds[2] + overlap_px), (thirds[2] - overlap_px, thirds[3])]
+    bounds = [(thirds[0], thirds[1] + overlap_px),
+              (thirds[1] - overlap_px, thirds[2] + overlap_px),
+              (thirds[2] - overlap_px, thirds[3])]
     return [image.crop((0, t, w, b)) for t, b in bounds], bounds
 
+# 🧠 Confidence Estimator
 def estimate_confidence(label, text):
     text = text.strip()
     if not text:
@@ -94,6 +100,7 @@ def estimate_confidence(label, text):
         return 75.0 if re.match(r"^[Α-ΩΆΈΉΊΌΎΏα-ωάέήίόύώ\s\-]{3,}$", text) else 30.0
     return 50.0
 
+# 🩹 Vision OCR Fallback
 def extract_field_from_box_with_vision(pil_img, box, label):
     try:
         x, y, bw, bh = [float(v) for v in box]
@@ -104,25 +111,27 @@ def extract_field_from_box_with_vision(pil_img, box, label):
         y2 = int((y + bh) * h)
         cropped = pil_img.convert("RGB").crop((x1, y1, x2, y2))
     except Exception as e:
-        st.warning(f"⚠️ Crop error for {label}: {e}")
+        st.warning(f"⚠️ Crop error for '{label}': {e}")
         return "", 0.0
-
     try:
         buf = BytesIO()
         cropped.save(buf, format="JPEG")
         client = vision.ImageAnnotatorClient()
         image = vision.Image(content=buf.getvalue())
-        context = {"language_hints": ["el"]}
-        response = client.text_detection(image=image, image_context=context)
+        response = client.text_detection(
+            image=image,
+            image_context={"language_hints": ["el"]}
+        )
         if response.error.message:
-            st.warning(f"🛑 Vision error for {label}: {response.error.message}")
+            st.warning(f"🛑 Vision API error: {response.error.message}")
             return "", 0.0
         desc = response.text_annotations[0].description.strip() if response.text_annotations else ""
         return desc, estimate_confidence(label, desc)
     except Exception as e:
-        st.warning(f"🛑 OCR failed for {label}: {e}")
+        st.warning(f"🛑 OCR failed: {e}")
         return "", 0.0
 
+# 🧠 Document AI Wrapper
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -137,65 +146,72 @@ def parse_docai(pil_img, project_id, processor_id, location):
     except Exception as e:
         st.error(f"📛 Document AI error: {e}")
         return None
-# 🚀 Streamlit page setup
+# 🚀 Streamlit page and title
 st.set_page_config(page_title="📜 Greek Registry Parser", layout="wide")
 st.title("📜 Greek Registry Parser — Document AI + Vision Review")
 
-# 📦 Document AI configuration
+# 📦 Document AI config (replace with your own if needed)
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
 
-# 🧰 Sidebar settings
-st.sidebar.header("⚙️ Parser Setup")
+# 🧠 Global parsing containers
+forms_parsed = []
+target_labels = [
+    "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ",
+    "ΕΠΩΝΥΜΟΝ",
+    "ΟΝΟΜΑ ΠΑΤΡΟΣ",
+    "ΟΝΟΜΑ ΜΗΤΡΟΣ",
+    "ΚΥΡΙΟΝ ΟΝΟΜΑ"
+]
+manual_boxes_per_form = {}
+
+# 🧰 Sidebar configuration
+st.sidebar.header("⚙️ Parser Settings")
 overlap = st.sidebar.slider("🔁 Zone Overlap (px)", 0, 120, value=40)
 normalize_input = st.sidebar.checkbox("📏 Normalize Box Inputs", value=True)
 
-# 🔐 GCP credentials
+# 🔐 GCP credential loader
 cred_file = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f:
         f.write(cred_file.read())
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
-    st.sidebar.success("✅ GCP credentials loaded")
+    st.sidebar.success("✅ Credentials loaded")
 
-# 📥 Load optional fallback layout
-uploaded_box_map = st.sidebar.file_uploader("📥 Import Box Map", type=["json"])
-manual_boxes_per_form = {}
+# 📥 Optional box layout import
+uploaded_box_map = st.sidebar.file_uploader("📥 Import Box Layout Map", type=["json"])
 if uploaded_box_map:
     try:
         manual_boxes_per_form = json.load(uploaded_box_map)
         st.sidebar.success(f"✅ Loaded box layout for {len(manual_boxes_per_form)} form(s)")
     except Exception as e:
-        st.sidebar.error(f"❌ Failed to parse box map: {e}")
+        st.sidebar.error(f"❌ Could not parse box map: {e}")
 
-# 🖼️ Upload registry page
+# 🖼️ Registry image upload
 uploaded_image = st.file_uploader("🖼️ Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not uploaded_image:
-    st.info("ℹ️ Please upload a registry scan to begin.")
+    st.info("ℹ️ Upload a registry scan to begin.")
     st.stop()
 
-# ✂️ Trim and preprocess image
+# ✂️ Trim, crop and split zones
 try:
     original = Image.open(uploaded_image)
     cropped = crop_left(trim_whitespace(original))
-    if cropped.size == (0, 0):
-        st.error("❌ Cropped image is blank. Try re-scanning.")
-        st.stop()
     zones, bounds = split_zones_fixed(cropped, overlap)
     if not zones:
-        st.error("❌ Failed to split image into zones.")
+        st.error("❌ Failed to split image into vertical zones.")
         st.stop()
 except Exception as e:
     st.error(f"🛑 Image preprocessing error: {e}")
     st.stop()
 
-# 🧾 Preview cropped and split zones
+# 🧾 Visual previews
 st.image(cropped, caption="📎 Cropped Registry (Left Side)", use_container_width=True)
-st.header("🧾 Preview of Split Zones")
+st.header("🧾 Registry Zone Previews")
 for i, zone in enumerate(zones, start=1):
     st.image(zone, caption=f"Zone {i}", width=280)
-# 🔁 Labels to extract from form zones
+# 🔠 Target Field Labels to Extract
 target_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ",
     "ΕΠΩΝΥΜΟΝ",
@@ -204,14 +220,15 @@ target_labels = [
     "ΚΥΡΙΟΝ ΟΝΟΜΑ"
 ]
 
+# 📦 Container for Parsed Data
 forms_parsed = []
 
-# 🔁 Parse each zone from image
+# 🔁 Parse Each Zone from Cropped Image
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     zone_w, zone_h = zone.size
 
-    # 📐 Load and normalize fallback boxes
+    # 📐 Editable Box Layout Setup
     initial_boxes = manual_boxes_per_form.get(str(idx), {})
     editor_rows = []
     for label in target_labels:
@@ -225,9 +242,14 @@ for idx, zone in enumerate(zones, start=1):
                 h /= zone_h
         except:
             x, y, w, h = None, None, None, None
-        editor_rows.append({"Label": label, "X": x, "Y": y, "Width": w, "Height": h})
+        editor_rows.append({
+            "Label": label,
+            "X": x,
+            "Y": y,
+            "Width": w,
+            "Height": h
+        })
 
-    # 📝 Streamlit editor to adjust boxes
     editor_df = st.data_editor(
         pd.DataFrame(editor_rows),
         use_container_width=True,
@@ -235,23 +257,23 @@ for idx, zone in enumerate(zones, start=1):
         key=f"box_editor_{idx}"
     )
 
-    # 💾 Store edited layout
+    # 💾 Save Normalized Box Inputs
     manual_boxes_per_form[str(idx)] = {
         row["Label"]: (row["X"], row["Y"], row["Width"], row["Height"])
         for _, row in editor_df.iterrows()
         if all(val is not None for val in (row["X"], row["Y"], row["Width"], row["Height"]))
     }
 
-    # ↔️ Propagate layout from Form 1
+    # ↔️ Propagate Layout from Form 1 to Remaining Zones
     if idx == 1:
         layout_1 = manual_boxes_per_form["1"]
         for z in range(2, len(zones) + 1):
             fid = str(z)
             if fid not in manual_boxes_per_form:
                 manual_boxes_per_form[fid] = layout_1
-        st.info("📐 Propagated Form 1 layout to all forms")
+        st.info("📐 Layout from Form 1 applied to all zones")
 
-    # 🎨 Render box overlay on zone
+    # 🎨 Annotated Overlay of Editable Boxes
     overlay = zone.copy()
     draw = ImageDraw.Draw(overlay)
     font = ImageFont.truetype("arial.ttf", size=14) if os.path.exists("arial.ttf") else None
@@ -259,15 +281,17 @@ for idx, zone in enumerate(zones, start=1):
         try:
             x, y, bw, bh = [float(v) for v in box]
             w, h = overlay.size
-            x1, y1 = int(x * w), int(y * h)
-            x2, y2 = int((x + bw) * w), int((y + bh) * h)
+            x1 = int(x * w)
+            y1 = int(y * h)
+            x2 = int((x + bw) * w)
+            y2 = int((y + bh) * h)
             draw.rectangle([(x1, y1), (x2, y2)], outline="purple", width=2)
             draw.text((x1, y1 - 16), label, fill="purple", font=font)
         except Exception as e:
-            st.warning(f"⚠️ Overlay error for '{label}': {e}")
-    st.image(overlay, caption="🟣 Annotated Boxes", use_container_width=True)
+            st.warning(f"⚠️ Overlay issue for '{label}': {e}")
+    st.image(overlay, caption="🟣 Editable Box Layout", use_container_width=True)
 
-    # 🧠 Document AI parse
+    # 🧠 Document AI Field Extraction
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     extracted = {}
     if doc:
@@ -291,7 +315,7 @@ for idx, zone in enumerate(zones, start=1):
                             "Thumb": None
                         }
 
-    # 🩹 Vision fallback OCR
+    # 🩹 Vision OCR Fallback for Missing Fields
     fields = []
     for label in target_labels:
         f = extracted.get(label)
@@ -309,8 +333,10 @@ for idx, zone in enumerate(zones, start=1):
         try:
             x, y, bw, bh = [float(v) for v in box]
             w, h = zone.size
-            x1, y1 = int(x * w), int(y * h)
-            x2, y2 = int((x + bw) * w), int((y + bh) * h)
+            x1 = int(x * w)
+            y1 = int(y * h)
+            x2 = int((x + bw) * w)
+            y2 = int((y + bh) * h)
             thumb = zone.crop((x1, y1, x2, y2)).convert("RGB")
         except:
             thumb = None
@@ -325,7 +351,7 @@ for idx, zone in enumerate(zones, start=1):
             "Thumb": thumb
         })
 
-    # 🗃️ Extract table rows if present
+    # 🗃️ Registry Table Row Extraction
     table_rows = []
     if doc:
         for page in doc.pages:
@@ -356,19 +382,20 @@ for idx, zone in enumerate(zones, start=1):
                         row_data[key] = normalize(value)
                     table_rows.append(row_data)
 
-    # 🗂️ Store parsed results
+    # 💾 Store Parsed Zone Results
     forms_parsed.append({
         "Form": idx,
         "Fields": fields,
         "TableRows": table_rows,
         "Missing": [f["Label"] for f in fields if not f["Raw"].strip()]
     })
-# 🧠 Final Review Dashboard
+# 🧠 Review Panel Header
 st.header("📊 Registry Review and Export Dashboard")
 
-apply_all = st.checkbox("🧠 Apply All Suggested Corrections", value=False)
+apply_all = st.checkbox("💡 Apply All Suggested Corrections", value=False)
 flat_fields = []
 
+# 🔁 Loop through parsed forms
 for form in forms_parsed:
     form_id = form["Form"]
     fields = form["Fields"]
@@ -376,9 +403,10 @@ for form in forms_parsed:
     st.subheader(f"📄 Form {form_id}")
     col1, col2 = st.columns(2)
 
-    # 🔍 Left: Parsed Field Details
+    # 🔍 Column 1: Parsed Results Overview
     with col1:
-        parsed_df = pd.DataFrame([
+        st.markdown("🔍 Parsed Fields")
+        df_summary = pd.DataFrame([
             {
                 "Label": f["Label"],
                 "Raw": f["Raw"],
@@ -387,12 +415,11 @@ for form in forms_parsed:
                 "Issues": ", ".join(f["Issues"])
             } for f in fields
         ])
-        st.markdown("🔍 Parsed Fields")
-        st.dataframe(parsed_df, use_container_width=True)
+        st.dataframe(df_summary, use_container_width=True)
 
-    # ✏️ Right: Final Review Interface
+    # ✏️ Column 2: Final Review and Input
     with col2:
-        st.markdown("✏️ Confirm Final Text")
+        st.markdown("✏️ Final Corrections")
         for f in fields:
             label = f["Label"]
             suggestion = f.get("Suggestion")
@@ -405,10 +432,12 @@ for form in forms_parsed:
                 key=f"final_{form_id}_{label}"
             )
 
-            thumb = f.get("Thumb")
-            if thumb and f.get("Issues"):
-                st.image(thumb.convert("RGB"), caption=f"{label} → {', '.join(f['Issues'])}", width=220)
+            # 🖼️ Show thumbnail if problematic
+            if f.get("Thumb") and f.get("Issues"):
+                thumb = f["Thumb"].convert("RGB") if f["Thumb"].mode != "RGB" else f["Thumb"]
+                st.image(thumb, caption=f"{label} → {', '.join(f['Issues'])}", width=220)
 
+    # 📦 Collect cleaned field data
     flat_fields.extend([
         {
             "Form": form_id,
@@ -423,78 +452,79 @@ for form in forms_parsed:
         } for f in fields
     ])
 
-    # 🗃️ Registry Table Rows
+    # 🗃️ Table Extraction Preview
     if form.get("TableRows"):
         st.subheader("🗃️ Registry Table Rows")
         df_table = pd.DataFrame(form["TableRows"])
         st.dataframe(df_table, use_container_width=True)
 
         st.download_button(
-            label=f"📥 Download Table CSV — Form {form_id}",
+            label=f"📥 Download Table — Form {form_id}",
             data=df_table.to_csv(index=False),
             file_name=f"registry_table_form_{form_id}.csv",
             mime="text/csv"
         )
 
-# 📤 Export Final Field Corrections
-st.header("📤 Export Final Field Data")
+# 📤 Final Export Section
+st.header("📤 Export Final Data")
 
 df_export = pd.DataFrame(flat_fields)
 
 st.download_button(
-    label="📄 Download as CSV",
+    label="📄 Download Fields (CSV)",
     data=df_export.drop(columns=["Thumb"]).to_csv(index=False),
     file_name="registry_fields.csv",
     mime="text/csv"
 )
 
 st.download_button(
-    label="📄 Download as JSON",
+    label="📄 Download Fields (JSON)",
     data=json.dumps(flat_fields, indent=2, ensure_ascii=False),
     file_name="registry_fields.json",
     mime="application/json"
 )
 
-# 📈 Confidence Summary
-st.header("📈 Confidence Analysis")
+# 📈 Confidence Analysis
+st.header("📈 Confidence Summary")
 
 if not df_export.empty:
     avg_conf = round(df_export["Confidence"].mean(), 2)
-    st.markdown(f"📌 Average Field Confidence: **{avg_conf}%**")
+    st.markdown(f"📌 Average Confidence: **{avg_conf}%**")
 
     low_conf_df = df_export[df_export["Confidence"] < 50.0]
     if not low_conf_df.empty:
-        st.subheader("🔍 Fields with Confidence < 50%")
+        st.subheader("🔍 Low Confidence Fields (< 50%)")
         st.dataframe(low_conf_df.drop(columns=["Thumb"]), use_container_width=True)
 else:
-    st.warning("⚠️ No confidence data available.")
+    st.warning("⚠️ No field confidence data found.")
 
-# 🚨 Validation Issue Summary
-st.header("🚨 Validation Flags")
+# 🚨 Validation Issue Tracker
+st.header("🚨 Validation Issues")
 
 problem_fields = [f for f in flat_fields if f["Issues"]]
 if problem_fields:
     st.dataframe(pd.DataFrame(problem_fields).drop(columns=["Thumb"]), use_container_width=True)
 else:
-    st.markdown("✅ No validation issues detected.")
+    st.markdown("✅ No flagged issues found.")
 
-# 💡 Suggestions Used
+# 💡 Applied Suggestions Recap
 st.header("💡 Suggestions Applied")
 
 used_suggestions = [f for f in flat_fields if f["Suggestion"]]
 if used_suggestions:
     for f in used_suggestions:
         st.markdown(f"**Form {f['Form']} — {f['Label']}**")
-        st.markdown(f"🔍 Parsed: `{f['Corrected']}` → Suggested: `{f['Suggestion']}` → Final: `{f['Final']}`")
+        st.markdown(f"🔍 Parsed: `{f['Corrected']}`")
+        st.markdown(f"💡 Suggested: `{f['Suggestion']}` → Final: `{f['Final']}`")
         st.markdown("---")
 else:
     st.markdown("🟢 No suggestions used.")
 
-# 💾 Fallback Box Layout Export
-st.header("📦 Export Fallback Box Layout")
+# 💾 Export Box Layout
+st.header("📦 Export Manual Box Layout")
 
 st.download_button(
-    label="💾 Download Box Layout as JSON",
+    label="💾 Download Box Layout (JSON)",
     data=json.dumps(manual_boxes_per_form, indent=2, ensure_ascii=False),
     file_name="manual_boxes_per_form.json",
     mime="application/json"
