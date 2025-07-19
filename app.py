@@ -114,6 +114,14 @@ if uploaded_box_map:
     try:
         manual_boxes_per_form = json.load(uploaded_box_map)
         st.sidebar.success(f"✅ Loaded box map for {len(manual_boxes_per_form)} form(s)")
+
+        # 🧠 Propagate Form 1 layout to forms with no box defined
+        if "1" in manual_boxes_per_form:
+            for z in range(2, 4):  # assuming 3 zones
+                form_id = str(z)
+                if not manual_boxes_per_form.get(form_id):
+                    manual_boxes_per_form[form_id] = manual_boxes_per_form["1"]
+            st.sidebar.info("📐 Applied Form 1 layout to missing forms")
     except Exception as e:
         st.sidebar.error(f"📛 Failed to load box map: {e}")
 
@@ -124,7 +132,6 @@ if not uploaded_image:
     st.info("ℹ️ Please upload a registry image to continue.")
     st.stop()
 
-# Preprocessing
 original = Image.open(uploaded_image)
 cropped = crop_left(trim_whitespace(original))
 zones, bounds = split_zones_fixed(cropped, overlap)
@@ -139,12 +146,11 @@ target_labels = [
 
 forms_parsed = []
 
-# Loop through zones
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     zone_width, zone_height = zone.size
 
-    # Prefill fallback box editor
+    # Prefill box table
     existing = manual_boxes_per_form.get(str(idx), {})
     prefill_rows = []
     for label in target_labels:
@@ -160,7 +166,7 @@ for idx, zone in enumerate(zones, start=1):
             else:
                 x, y, w, h = x_raw, y_raw, w_raw, h_raw
             if any(val is None or val <= 0 or val > 1 for val in (x, y, w, h)):
-                raise ValueError("Invalid box dimensions")
+                raise ValueError("Invalid box")
         except Exception:
             x, y, w, h = None, None, None, None
         prefill_rows.append({"Label": label, "X": x, "Y": y, "Width": w, "Height": h})
@@ -172,7 +178,7 @@ for idx, zone in enumerate(zones, start=1):
         key=f"editor_{idx}"
     )
 
-    # Store updated boxes
+    # Save boxes
     manual_boxes_per_form[str(idx)] = {}
     for _, row in box_editor.iterrows():
         label = row["Label"]
@@ -180,7 +186,16 @@ for idx, zone in enumerate(zones, start=1):
         if all(val is not None for val in (x, y, w, h)):
             manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
 
-    # Overlay fallback boxes
+    # 🧠 After editing Form 1, apply to missing forms
+    if idx == 1:
+        updated_boxes = manual_boxes_per_form.get("1", {})
+        for z in range(2, len(zones) + 1):
+            form_id = str(z)
+            if not manual_boxes_per_form.get(form_id):
+                manual_boxes_per_form[form_id] = updated_boxes
+        st.info("📐 Applied Form 1 layout to undefined forms")
+
+    # 🟣 Overlay fallback boxes
     overlay = zone.copy()
     draw = ImageDraw.Draw(overlay)
     w, h = overlay.size
@@ -224,7 +239,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # Merge AI & fallback
+    # Merge with fallback
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"]:
