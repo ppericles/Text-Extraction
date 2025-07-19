@@ -7,67 +7,57 @@ import cv2
 from io import BytesIO
 from google.cloud import documentai_v1 as documentai
 
-# 📍 GCP Setup
-project_id = "heroic-gantry-380919"
-processor_id = "8f7f56e900fbb37e"
-location = "eu"
-docai_client = documentai.DocumentProcessorServiceClient(
-    client_options={"api_endpoint": f"{location}-documentai.googleapis.com"}
-)
-
-# 🔠 Normalize Greek: uppercase + strip accents
+# 🔠 Normalize Greek: Uppercase + Remove Accents
 def normalize(text):
     if not text: return ""
     text = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
     return text.upper().strip()
 
-# 🧬 Schema Mapping
+# 🧬 Registry Schema Mapping
 schema_map = {
-    "ονομα": "name",
-    "ονοματεπωνυμο": "name",
-    "επωνυμο": "surname",
-    "ημερομηνια γεννησης": "birth_date",
-    "ημ. γεννησης": "birth_date",
-    "τοπος γεννησης": "birth_place",
-    "αριθμος μητρωου": "registry_id",
-    "αρ. μητρωου": "registry_id",
-    "διευθυνση": "address",
-    "πολη": "city"
+    "ΟΝΟΜΑ": "name",
+    "ΟΝΟΜΑΤΕΠΩΝΥΜΟ": "name",
+    "ΕΠΩΝΥΜΟ": "surname",
+    "ΗΜΕΡΟΜΗΝΙΑ ΓΕΝΝΗΣΗΣ": "birth_date",
+    "ΗΜ. ΓΕΝΝΗΣΗΣ": "birth_date",
+    "ΤΟΠΟΣ ΓΕΝΝΗΣΗΣ": "birth_place",
+    "ΑΡΙΘΜΟΣ ΜΗΤΡΩΟΥ": "registry_id",
+    "ΑΡ. ΜΗΤΡΩΟΥ": "registry_id",
+    "ΔΙΕΥΘΥΝΣΗ": "address",
+    "ΠΟΛΗ": "city"
 }
 
 def map_schema(label):
     label_norm = normalize(label)
-    for raw, key in schema_map.items():
-        if raw in label_norm:
-            return key
-    return "unknown"
+    return schema_map.get(label_norm, "unknown")
 
-# ✂️ Crop image to left half
+# ✂️ Crop to Left Half
 def crop_left(image):
     w, h = image.size
-    return image.crop((0, 0, w // 2, h))
+    return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# 🧼 Preprocess image (rescale + blur + binarize)
+# 🧼 Preprocess Image
 def preprocess(image):
     if image.width > 1500:
         image = image.resize((1500, int(image.height * 1500 / image.width)))
-    np_img = np.array(image)
-    gray = cv2.cvtColor(np_img, cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
     _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return Image.fromarray(binary)
 
-# 🔍 Parse image via Document AI
-def parse_docai(image):
-    name = docai_client.processor_path(project_id, location, processor_id)
+# 🔍 Document AI Parsing
+def parse_docai(pil_img, project_id, processor_id, location):
+    client = documentai.DocumentProcessorServiceClient(
+        client_options={"api_endpoint": f"{location}-documentai.googleapis.com"}
+    )
+    name = client.processor_path(project_id, location, processor_id)
     buf = BytesIO()
-    image.save(buf, format="JPEG")
-    buf.seek(0)
+    pil_img.save(buf, format="JPEG")
     raw = documentai.RawDocument(content=buf.read(), mime_type="image/jpeg")
     request = documentai.ProcessRequest(name=name, raw_document=raw)
-    return docai_client.process_document(request=request).document
+    return client.process_document(request=request).document
 
-# 🧠 Extract form fields
+# 🧠 Extract Form Fields
 def extract_forms(doc):
     zones = {1: [], 2: [], 3: []}
     for page in doc.pages:
@@ -87,61 +77,64 @@ def extract_forms(doc):
             })
     return zones
 
-# 📋 Table reconstruction via token geometry
-def extract_table(doc):
-    boxes = []
+# 📋 Manual Table Builder Using Header Matching
+def extract_table_by_headers(doc, target_headers):
+    lines = []
     for page in doc.pages:
-        for token in page.tokens:
-            text = token.layout.text_anchor.content or ""
-            box = token.layout.bounding_poly.normalized_vertices
-            avg_y = sum(v.y for v in box) / len(box)
-            avg_x = sum(v.x for v in box) / len(box)
-            boxes.append({"text": normalize(text), "y": avg_y, "x": avg_x})
-    if not boxes:
+        for para in page.paragraphs:
+            line = para.layout.text_anchor.content or ""
+            line_norm = normalize(line)
+            if line_norm: lines.append(line_norm)
+
+    header_found = None
+    for line in lines:
+        if all(h in line for h in target_headers):
+            header_found = line
+            break
+
+    if not header_found:
         return []
 
-    # Group into rows by Y-position
-    boxes.sort(key=lambda b: b["y"])
+    headers = header_found.split()
     rows = []
-    current_row = []
-    threshold = 0.01
-    for box in boxes:
-        if not current_row or abs(box["y"] - current_row[-1]["y"]) < threshold:
-            current_row.append(box)
-        else:
-            rows.append(current_row)
-            current_row = [box]
-    if current_row:
-        rows.append(current_row)
+    collecting = False
+    for line in lines:
+        if line == header_found:
+            collecting = True
+            continue
+        if collecting:
+            parts = line.split()
+            row = {}
+            for i, h in enumerate(headers):
+                row[h] = parts[i] if i < len(parts) else ""
+            rows.append(row)
+            if len(rows) >= 10:
+                break
+    return rows
 
-    if len(rows) < 2:
-        return []
+# 🖼️ Streamlit App
+st.set_page_config(layout="wide", page_title="Registry OCR — Form + Header-Matched Table")
+st.title("🏛️ Registry OCR — Forms + Custom Header Table Builder")
 
-    # First row = header
-    headers = [b["text"] for b in sorted(rows[0], key=lambda b: b["x"])]
-    table = []
-    for row in rows[1:]:
-        cells = [b["text"] for b in sorted(row, key=lambda b: b["x"])]
-        record = {}
-        for i, h in enumerate(headers):
-            record[h] = cells[i] if i < len(cells) else ""
-        table.append(record)
-    return table
-
-# 🖼️ Streamlit UI
-st.set_page_config(layout="wide", page_title="Registry Parser with Table Recovery")
-st.title("🏛️ Greek Registry Parser — Smart Form + Token Table")
-
-cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
+# 🔐 Credentials + Upload
+cred = st.sidebar.file_uploader("🔐 GCP Credentials (.json)", type=["json"])
 if cred:
     with open("credentials.json", "wb") as f:
         f.write(cred.read())
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
-    st.sidebar.success("Credentials loaded")
+    st.sidebar.success("✅ Credentials loaded")
 
-file = st.file_uploader("📎 Upload Registry Image", type=["jpg", "jpeg", "png"])
+file = st.file_uploader("📎 Upload Registry Scan", type=["jpg", "jpeg", "png"])
 if not file: st.stop()
 
+headers_input = st.sidebar.text_input("📋 Table Headers (comma-separated in Greek)", value="ΗΜΕΡΟΜΗΝΙΑ,ΕΝΕΡΓΕΙΑ,ΣΧΟΛΙΑ")
+target_headers = [normalize(h.strip()) for h in headers_input.split(",") if h.strip()]
+
+project_id = "heroic-gantry-380919"
+processor_id = "8f7f56e900fbb37e"
+location = "eu"
+
+# 🧼 Image Prep
 img = Image.open(file)
 left = crop_left(img)
 proc = preprocess(left)
@@ -149,13 +142,13 @@ proc = preprocess(left)
 st.image(img, caption="📜 Full Original Image", use_column_width=True)
 st.image(proc, caption="🧼 Preprocessed Left Half", use_column_width=True)
 
-with st.spinner("🔍 Parsing with Document AI..."):
-    doc = parse_docai(proc.copy())
+with st.spinner("🔍 Parsing image..."):
+    doc = parse_docai(proc.copy(), project_id, processor_id, location)
     forms = extract_forms(doc)
-    table_rows = extract_table(doc)
+    table = extract_table_by_headers(doc, target_headers)
 
-# 📋 Show Forms
-st.subheader("📄 Form Fields (Grouped by Vertical Zones)")
+# 📄 Display Forms
+st.subheader("📋 Parsed Form Fields")
 form_stats, all_fields = [], []
 
 for zone in [1, 2, 3]:
@@ -166,30 +159,30 @@ for zone in [1, 2, 3]:
         continue
     total = 0
     for i, f in enumerate(fields):
-        st.text_input(f"{f['Label']} ({f['Confidence']}%) → [{f['Schema']}]", value=f['Corrected'], key=f"{zone}_{i}")
+        st.text_input(f"{f['Label']} ({f['Confidence']}%) → [{f['Schema']}]", value=f["Corrected"], key=f"{zone}_{i}")
         total += f["Confidence"]
         all_fields.append(f)
-    avg_conf = round(total / len(fields), 2)
-    form_stats.append((zone, len(fields), avg_conf))
+    avg = round(total / len(fields), 2)
+    form_stats.append((zone, len(fields), avg))
     st.dataframe(pd.DataFrame(fields), use_container_width=True)
 
 st.subheader("📊 Form Summary")
 st.dataframe(pd.DataFrame(form_stats, columns=["Form", "Fields", "Avg Confidence"]), use_container_width=True)
 
-# 📋 Show Table
-st.subheader("🧾 Reconstructed Table (Token Geometry)")
-if table_rows:
-    st.dataframe(pd.DataFrame(table_rows), use_container_width=True)
+# 📋 Table Preview
+st.subheader("🧾 Extracted Table Based on Headers")
+if table:
+    st.dataframe(pd.DataFrame(table), use_container_width=True)
 else:
-    st.warning("⚠️ No table rows detected.")
+    st.warning("⚠️ Table headers not found — try adjusting header input or checking OCR quality.")
 
 # 💾 Export
 st.subheader("💾 Export Data")
 form_df = pd.DataFrame(all_fields)
-st.download_button("Download Forms CSV", form_df.to_csv(index=False), "forms.csv", "text/csv")
-st.download_button("Download Forms JSON", json.dumps(all_fields, indent=2, ensure_ascii=False), "forms.json", "application/json")
+st.download_button("📄 Download Forms CSV", form_df.to_csv(index=False), "forms.csv", "text/csv")
+st.download_button("📄 Download Forms JSON", json.dumps(all_fields, indent=2, ensure_ascii=False), "forms.json", "application/json")
 
-if table_rows:
-    table_df = pd.DataFrame(table_rows)
-    st.download_button("Download Table CSV", table_df.to_csv(index=False), "table.csv", "text/csv")
-    st.download_button("Download Table JSON", json.dumps(table_rows, indent=2, ensure_ascii=False), "table.json", "application/json")
+if table:
+    table_df = pd.DataFrame(table)
+    st.download_button("🧾 Download Table CSV", table_df.to_csv(index=False), "table.csv", "text/csv")
+    st.download_button("🧾 Download Table JSON", json.dumps(table, indent=2, ensure_ascii=False), "table.json", "application/json")
