@@ -7,7 +7,6 @@ import numpy as np
 from google.cloud import documentai_v1 as documentai
 from google.cloud import vision
 
-# Normalize Greek text
 def normalize(text):
     if not text: return ""
     text = unicodedata.normalize("NFD", text)
@@ -15,7 +14,6 @@ def normalize(text):
     text = re.sub(r"[^\w\sΑ-ΩάέήίόύώΆΈΉΊΌΎΏ]", "", text)
     return text.upper().strip()
 
-# Trim whitespace around image
 def trim_whitespace(image, threshold=240, buffer=10):
     gray = image.convert("L")
     pixels = gray.load()
@@ -26,19 +24,16 @@ def trim_whitespace(image, threshold=240, buffer=10):
     right = next((x for x in reversed(range(w)) if any(pixels[x, y] < threshold for y in range(h))), w)
     return image.crop((max(0, left - buffer), max(0, top - buffer), min(w, right + buffer), min(h, bottom + buffer)))
 
-# Crop left side of registry
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Split image into vertical zones
 def split_zones_fixed(image, overlap_px):
     w, h = image.size
     thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
     bounds = [(thirds[0], thirds[1] + overlap_px), (thirds[1] - overlap_px, thirds[2] + overlap_px), (thirds[2] - overlap_px, thirds[3])]
     return [image.crop((0, t, w, b)) for t, b in bounds], bounds
 
-# Call Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -53,7 +48,6 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Vision OCR for fallback bounding boxes
 def extract_field_from_box_with_vision(pil_img, box):
     w, h = pil_img.size
     x, y, bw, bh = box
@@ -63,21 +57,18 @@ def extract_field_from_box_with_vision(pil_img, box):
     buf = BytesIO()
     cropped.save(buf, format="JPEG")
     buf.seek(0)
-
     client = vision.ImageAnnotatorClient()
     image = vision.Image(content=buf.read())
     response = client.text_detection(image=image)
-
     if response.error.message:
         st.warning(f"🛑 Vision API Error: {response.error.message}")
         return ""
     return response.text_annotations[0].description.strip() if response.text_annotations else ""
-# UI Layout
+# Layout and sidebar
 st.set_page_config(layout="wide", page_title="Registry Parser")
-st.title("📜 Greek Registry Parser — Document AI + Vision AI Fallback")
+st.title("📜 Greek Registry Parser — AI + Manual Fallbacks")
 
-# Sidebar Settings
-overlap = st.sidebar.slider("🔁 Vertical Zone Overlap", 0, 120, 60)
+overlap = st.sidebar.slider("🔁 Zone Overlap", 0, 120, 60, step=10)
 cred_file = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f: f.write(cred_file.read())
@@ -95,16 +86,16 @@ if uploaded_box_map:
 
 uploaded_image = st.file_uploader("🖼️ Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not uploaded_image:
-    st.info("ℹ️ Please upload a registry image to continue.")
+    st.info("ℹ️ Please upload an image to continue.")
     st.stop()
 
-# Preprocess Image
+# Preprocess image
 original = Image.open(uploaded_image)
 cropped = crop_left(trim_whitespace(original))
 zones, bounds = split_zones_fixed(cropped, overlap)
-st.image(cropped, caption="🖼️ Processed Registry (Left Side)", use_container_width=True)
+st.image(cropped, caption="🖼️ Trimmed Registry (Left Side)", use_container_width=True)
 
-# Document AI Config
+# Config
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
@@ -115,9 +106,50 @@ target_labels = [
 
 forms_parsed = []
 
-# Form Zone Loop
+# Zone processing loop
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
+
+    # Manual fallback input table
+    st.subheader("✏️ Specify Fallback Boxes")
+    default_rows = pd.DataFrame({
+        "Label": target_labels,
+        "X": [None]*len(target_labels),
+        "Y": [None]*len(target_labels),
+        "Width": [None]*len(target_labels),
+        "Height": [None]*len(target_labels)
+    })
+    box_editor = st.data_editor(
+        default_rows,
+        use_container_width=True,
+        num_rows="dynamic",
+        key=f"editor_{idx}"
+    )
+
+    manual_boxes_per_form[str(idx)] = {}
+    for _, row in box_editor.iterrows():
+        label = row["Label"]
+        x, y, w, h = row["X"], row["Y"], row["Width"], row["Height"]
+        if all(val is not None for val in [x, y, w, h]):
+            manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
+
+    # Overlay bounding boxes on form image
+    if manual_boxes_per_form.get(str(idx)):
+        overlay_img = zone.copy()
+        draw = ImageDraw.Draw(overlay_img)
+        w, h = overlay_img.size
+        try:
+            font = ImageFont.truetype("arial.ttf", size=14)
+        except:
+            font = None
+        for label, (x, y, bw, bh) in manual_boxes_per_form[str(idx)].items():
+            x1, y1 = int(x * w), int(y * h)
+            x2, y2 = int((x + bw) * w), int((y + bh) * h)
+            draw.rectangle([(x1, y1), (x2, y2)], outline="purple", width=2)
+            draw.text((x1, y1 - 16), label, fill="purple", font=font or None)
+        st.image(overlay_img, caption="🟣 Fallback Box Overlay", use_container_width=True)
+
+    # Document AI parsing
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     if not doc: continue
 
@@ -135,7 +167,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # Fallback via imported box map
+    # Apply Vision fallback for missing fields
     form_boxes = manual_boxes_per_form.get(str(idx), {})
     fields = []
     for label in target_labels:
@@ -157,43 +189,16 @@ for idx, zone in enumerate(zones, start=1):
                 "Confidence": 0.0
             })
 
-    st.subheader("🧾 Extracted Fields")
+    st.subheader("🧾 Parsed Fields")
     st.dataframe(pd.DataFrame(fields), use_container_width=True)
-
-    # Manual Fallback Input via Table
-    st.subheader(f"✏️ Specify Fallback Boxes for Form {idx}")
-    default_rows = pd.DataFrame({
-        "Label": target_labels,
-        "X": [None]*len(target_labels),
-        "Y": [None]*len(target_labels),
-        "Width": [None]*len(target_labels),
-        "Height": [None]*len(target_labels)
-    })
-
-    box_editor = st.data_editor(
-        default_rows,
-        use_container_width=True,
-        num_rows="dynamic",
-        key=f"box_editor_{idx}"
-    )
-
-    manual_boxes_per_form[str(idx)] = {}
-    for _, row in box_editor.iterrows():
-        label = row["Label"]
-        x, y, w, h = row["X"], row["Y"], row["Width"], row["Height"]
-        if all(val is not None for val in [x, y, w, h]):
-            manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
-
-    if manual_boxes_per_form[str(idx)]:
-        st.success(f"✅ Recorded {len(manual_boxes_per_form[str(idx)])} manual box(es) for Form {idx}")
 
     forms_parsed.append({
         "Form": idx,
         "Fields": fields,
         "Missing": [f["Label"] for f in fields if not f["Raw"].strip()]
     })
-# 📤 Export Extracted Fields
-st.header("📤 Export Parsed Field Data")
+# 📦 Export Parsed Field Data
+st.header("📤 Export Parsed Fields")
 
 flat_fields = []
 for form in forms_parsed:
@@ -209,14 +214,14 @@ for form in forms_parsed:
 df = pd.DataFrame(flat_fields)
 
 st.download_button(
-    label="📄 Download Fields as CSV",
+    label="📄 Download as CSV",
     data=df.to_csv(index=False),
     file_name="registry_fields.csv",
     mime="text/csv"
 )
 
 st.download_button(
-    label="📄 Download Fields as JSON",
+    label="📄 Download as JSON",
     data=json.dumps(flat_fields, indent=2, ensure_ascii=False),
     file_name="registry_fields.json",
     mime="application/json"
@@ -236,13 +241,13 @@ if invalid_forms:
     for f in invalid_forms:
         st.markdown(f"- **Form {f['Form']}** → Missing: `{', '.join(f['Missing'])}`")
 
-# 💾 Export Fallback Box Maps
+# 💾 Export Fallback Box Layouts
 if manual_boxes_per_form:
-    st.header("🧠 Export Fallback Box Layouts")
+    st.header("🧠 Export Fallback Box Map")
     st.json(manual_boxes_per_form)
 
     st.download_button(
-        label="💾 Download Box Layouts as JSON",
+        label="💾 Download Fallback Boxes as JSON",
         data=json.dumps(manual_boxes_per_form, indent=2, ensure_ascii=False),
         file_name="manual_boxes_per_form.json",
         mime="application/json"
