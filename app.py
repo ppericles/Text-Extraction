@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageDraw
+from PIL import Image
 import os, json, unicodedata
 import numpy as np
 import pandas as pd
@@ -7,10 +7,21 @@ import cv2
 from io import BytesIO
 from google.cloud import documentai_v1 as documentai
 
-# --- CONFIG ---
+# 📍 GCP Setup
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
+docai_client = documentai.DocumentProcessorServiceClient(
+    client_options={"api_endpoint": f"{location}-documentai.googleapis.com"}
+)
+
+# 🔤 Accent removal + uppercase
+def normalize(text):
+    if not text: return ""
+    text = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
+    return text.upper().strip()
+
+# 📐 Schema mapping
 schema_map = {
     "ονομα": "name",
     "ονοματεπωνυμο": "name",
@@ -24,47 +35,40 @@ schema_map = {
     "πολη": "city"
 }
 
-# --- UTILS ---
-def normalize_text(text):
-    if not text: return ""
-    no_accents = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
-    return no_accents.upper().strip()
-
 def map_schema(label):
-    label_norm = normalize_text(label)
-    for raw, schema in schema_map.items():
+    label_norm = normalize(label)
+    for raw, key in schema_map.items():
         if raw in label_norm:
-            return schema
+            return key
     return "unknown"
 
-# --- IMAGE PRE ---
+# ✂️ Crop to left half
 def crop_left(image):
     w, h = image.size
     return image.crop((0, 0, w // 2, h))
 
+# 🧼 Preprocess image
 def preprocess(image):
     if image.width > 1500:
         image = image.resize((1500, int(image.height * 1500 / image.width)))
     np_img = np.array(image)
     gray = cv2.cvtColor(np_img, cv2.COLOR_RGB2GRAY)
-    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return Image.fromarray(binary)
 
-# --- PARSING ---
-def parse_docai(pil_img):
-    client = documentai.DocumentProcessorServiceClient(
-        client_options={"api_endpoint": f"{location}-documentai.googleapis.com"}
-    )
-    name = client.processor_path(project_id, location, processor_id)
+# 🔍 Parse via Document AI
+def parse_docai(image):
+    name = docai_client.processor_path(project_id, location, processor_id)
     buf = BytesIO()
-    pil_img.save(buf, format="JPEG")
-    raw_doc = documentai.RawDocument(content=buf.getvalue(), mime_type="image/jpeg")
-    request = documentai.ProcessRequest(name=name, raw_document=raw_doc)
-    return client.process_document(request=request).document
+    image.save(buf, format="JPEG")
+    buf.seek(0)
+    raw = documentai.RawDocument(content=buf.read(), mime_type="image/jpeg")
+    request = documentai.ProcessRequest(name=name, raw_document=raw)
+    return docai_client.process_document(request=request).document
 
-# --- FORM FIELDS ---
-def extract_form_fields(doc):
+# 🧠 Extract form fields into 3 vertical zones
+def extract_forms(doc):
     zones = {1: [], 2: [], 3: []}
     for page in doc.pages:
         for field in page.form_fields:
@@ -77,43 +81,58 @@ def extract_form_fields(doc):
             zones[zone].append({
                 "Label": label.strip(),
                 "Raw": value.strip(),
-                "Corrected": normalize_text(value),
+                "Corrected": normalize(value),
                 "Confidence": conf,
                 "Schema": map_schema(label)
             })
     return zones
 
-# --- MANUAL TABLE ---
-def extract_manual_table(doc):
-    blocks = []
+# 📋 Reconstruct table from OCR layout blocks
+def extract_table(doc):
+    boxes = []
     for page in doc.pages:
-        for block in page.paragraphs:
-            text = block.layout.text_anchor.content or ""
-            if not text.strip(): continue
-            box = block.layout.bounding_poly.normalized_vertices
+        for token in page.tokens:
+            text = token.text
+            box = token.layout.bounding_poly.normalized_vertices
             avg_y = sum(v.y for v in box) / len(box)
-            blocks.append((avg_y, normalize_text(text)))
-    blocks.sort(key=lambda x: x[0])
+            avg_x = sum(v.x for v in box) / len(box)
+            boxes.append({"text": normalize(text), "y": avg_y, "x": avg_x})
+    if not boxes:
+        return []
 
-    # Select last 11 lines as table (1 header + 10 rows)
-    table_lines = blocks[-11:] if len(blocks) >= 11 else blocks[-len(blocks):]
-    if not table_lines: return []
-
-    header_line = table_lines[0][1]
-    headers = [h.strip() for h in header_line.split()]
-
+    # Group by Y position (rows)
+    boxes.sort(key=lambda b: b["y"])
     rows = []
-    for _, line in table_lines[1:]:
-        cells = line.split()
-        row = {}
-        for i, h in enumerate(headers):
-            row[h] = cells[i] if i < len(cells) else ""
-        rows.append(row)
-    return rows
+    current_row = []
+    row_threshold = 0.01
+    for box in boxes:
+        if not current_row or abs(box["y"] - current_row[-1]["y"]) < row_threshold:
+            current_row.append(box)
+        else:
+            rows.append(current_row)
+            current_row = [box]
+    if current_row:
+        rows.append(current_row)
 
-# --- UI ---
-st.set_page_config(layout="wide", page_title="Registry Parser with Smart Table")
-st.title("🏛️ Greek Registry Parser — Forms + Table (Manual Mode)")
+    if len(rows) < 2:
+        return []
+
+    # First row is header
+    header_row = sorted(rows[0], key=lambda b: b["x"])
+    headers = [b["text"] for b in header_row]
+    table = []
+    for row in rows[1:]:
+        row_sorted = sorted(row, key=lambda b: b["x"])
+        cells = [b["text"] for b in row_sorted]
+        row_dict = {}
+        for i, h in enumerate(headers):
+            row_dict[h] = cells[i] if i < len(cells) else ""
+        table.append(row_dict)
+    return table
+
+# 🖼️ Streamlit UI
+st.set_page_config(layout="wide", page_title="Registry OCR — Form + Table Recovery")
+st.title("🏛️ Greek Registry Parser — Schema-Aware + Table Rebuilder")
 
 cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred:
@@ -122,64 +141,57 @@ if cred:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("Credentials loaded.")
 
-file = st.file_uploader("📎 Upload Registry Scan", type=["jpg", "jpeg", "png"])
+file = st.file_uploader("📎 Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not file: st.stop()
 
 img = Image.open(file)
-left_img = crop_left(img)
-proc_img = preprocess(left_img)
+cropped = crop_left(img)
+preprocessed = preprocess(cropped)
 
-st.image(img, caption="📜 Full Original Image", use_column_width=True)
-st.image(proc_img, caption="🧼 Cropped + Preprocessed", use_column_width=True)
+st.image(img, caption="📜 Original Full Image", use_column_width=True)
+st.image(preprocessed, caption="🧼 Preprocessed Left Half", use_column_width=True)
 
-with st.spinner("🔍 Parsing..."):
-    doc = parse_docai(proc_img.copy())
-    grouped = extract_form_fields(doc)
-    table_data = extract_manual_table(doc)
+with st.spinner("🔍 Parsing image via Document AI..."):
+    doc = parse_docai(preprocessed.copy())
+    forms = extract_forms(doc)
+    table_rows = extract_table(doc)
 
-# --- FORM DISPLAY ---
-st.subheader("📄 Form Field Extraction")
-form_stats, all_fields = [], []
+# 📄 Display Forms
+st.subheader("📋 Form Field Extraction")
+form_summary, form_records = [], []
 
-for zone in [1,2,3]:
-    fields = grouped[zone]
-    st.markdown(f"### 📋 Φόρμα {zone}")
+for zone in [1, 2, 3]:
+    fields = forms[zone]
+    st.markdown(f"### Φόρμα {zone}")
     if not fields:
         st.info("No fields found.")
         continue
-    zone_conf = 0
-    display = []
+    conf_total = 0
     for i, f in enumerate(fields):
-        label = f["Label"]
-        corrected = f["Corrected"]
-        conf = f["Confidence"]
-        schema = f["Schema"]
-        st.text_input(f"{label} ({conf}%) → [{schema}]", value=corrected, key=f"{zone}_{i}")
-        zone_conf += conf
-        display.append(f)
-    avg = round(zone_conf / len(fields), 2)
-    form_stats.append((zone, len(fields), avg))
-    all_fields.extend(display)
-    st.dataframe(pd.DataFrame(display), use_container_width=True)
+        st.text_input(f"{f['Label']} ({f['Confidence']}%) → [{f['Schema']}]", value=f['Corrected'], key=f"{zone}_{i}")
+        conf_total += f['Confidence']
+        form_records.append(f)
+    avg = round(conf_total / len(fields), 2)
+    form_summary.append((zone, len(fields), avg))
+    st.dataframe(pd.DataFrame(fields), use_container_width=True)
 
-st.subheader("📊 Form Stats")
-st.dataframe(pd.DataFrame(form_stats, columns=["Form", "Fields", "Avg Confidence"]), use_container_width=True)
+st.subheader("📊 Form Summary")
+st.dataframe(pd.DataFrame(form_summary, columns=["Form", "Fields", "Avg Confidence"]), use_container_width=True)
 
-# --- TABLE DISPLAY ---
-st.subheader("🧾 Manual Table Extraction (Bottom Section)")
-if table_data:
-    table_df = pd.DataFrame(table_data)
-    st.dataframe(table_df, use_container_width=True)
+# 📋 Display Table
+st.subheader("🧾 Reconstructed Table (Raw Geometry)")
+if table_rows:
+    st.dataframe(pd.DataFrame(table_rows), use_container_width=True)
 else:
-    st.warning("No table rows were detected from the document blocks.")
+    st.warning("⚠️ No table rows detected via geometry reconstruction.")
 
-# --- EXPORT ---
+# 💾 Export
 st.subheader("💾 Export Parsed Data")
-form_df = pd.DataFrame(all_fields)
-st.download_button("📄 Download Forms CSV", form_df.to_csv(index=False), "parsed_forms.csv", "text/csv")
-st.download_button("📄 Download Forms JSON", json.dumps(all_fields, indent=2, ensure_ascii=False), "parsed_forms.json", "application/json")
+form_df = pd.DataFrame(form_records)
+st.download_button("📄 Download Forms CSV", form_df.to_csv(index=False), "forms.csv", "text/csv")
+st.download_button("📄 Download Forms JSON", json.dumps(form_records, indent=2, ensure_ascii=False), "forms.json", "application/json")
 
-if table_data:
-    table_df = pd.DataFrame(table_data)
-    st.download_button("🧾 Download Table CSV", table_df.to_csv(index=False), "parsed_table.csv", "text/csv")
-    st.download_button("🧾 Download Table JSON", json.dumps(table_data, indent=2, ensure_ascii=False), "parsed_table.json", "application/json")
+if table_rows:
+    table_df = pd.DataFrame(table_rows)
+    st.download_button("🧾 Download Table CSV", table_df.to_csv(index=False), "table.csv", "text/csv")
+    st.download_button("🧾 Download Table JSON", json.dumps(table_rows, indent=2, ensure_ascii=False), "table.json", "application/json")
