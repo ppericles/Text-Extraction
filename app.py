@@ -6,24 +6,24 @@ import re
 from io import BytesIO
 from google.cloud import documentai_v1 as documentai
 
-# Text normalization
+# Normalize Greek text
 def normalize(text):
     if not text: return ""
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Crop image to left half
+# Crop left side of image
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Split into 3 vertical zones
+# Split image into vertical zones
 def split_zones(image):
     w, h = image.size
-    zones = [(0.00, 0.32), (0.33, 0.65), (0.66, 1.00)]
-    return [image.crop((0, int(h*t), w, int(h*b))).convert("RGB") for t, b in zones]
+    bounds = [(0.00, 0.32), (0.33, 0.65), (0.66, 1.00)]
+    return [image.crop((0, int(h*t), w, int(h*b))).convert("RGB") for t, b in bounds]
 
-# Send image to Document AI
+# Document AI parser
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -40,57 +40,55 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract fields with flexible label merging
+# Field extraction with label merging, missing fill, and confidence
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
 
     extracted = {}
-    raw_list = []
+    collected = []
     for page in doc.pages:
         for f in page.form_fields:
             label = f.field_name.text_anchor.content or ""
             value = f.field_value.text_anchor.content or ""
             conf = round(f.field_value.confidence * 100, 2)
-            raw_list.append({"Label": label.strip(), "Value": value.strip(), "Confidence": conf})
+            collected.append({"Label": label.strip(), "Value": value.strip(), "Confidence": conf})
 
-    # Merge labels
     i = 0
-    while i < len(raw_list):
-        lbl = raw_list[i]["Label"]
-        val = raw_list[i]["Value"]
-        conf = raw_list[i]["Confidence"]
-        merged_lbl = lbl
-        merged_val = val
+    while i < len(collected):
+        label = collected[i]["Label"]
+        value = collected[i]["Value"]
+        conf = collected[i]["Confidence"]
+        merged_label = label
+        merged_value = value
         merged_conf = conf
         found = False
 
-        for j in range(i+1, len(raw_list)):
-            merged_lbl += " " + raw_list[j]["Label"]
-            merged_val += " " + raw_list[j]["Value"]
-            merged_conf = round((merged_conf + raw_list[j]["Confidence"]) / 2, 2)
-            if any(normalize(merged_lbl).startswith(normalize(t)) or normalize(t) in normalize(merged_lbl) for t in target_labels):
-                extracted[merged_lbl.strip()] = {
-                    "Raw": merged_val.strip(), "Corrected": normalize(merged_val),
-                    "Confidence": merged_conf, "Schema": normalize(merged_lbl)
+        for j in range(i+1, len(collected)):
+            merged_label += " " + collected[j]["Label"]
+            merged_value += " " + collected[j]["Value"]
+            merged_conf = round((merged_conf + collected[j]["Confidence"]) / 2, 2)
+            if any(normalize(merged_label).startswith(normalize(t)) or normalize(t) in normalize(merged_label) for t in target_labels):
+                extracted[merged_label.strip()] = {
+                    "Raw": merged_value.strip(), "Corrected": normalize(merged_value),
+                    "Confidence": merged_conf, "Schema": normalize(merged_label)
                 }
                 i = j
                 found = True
                 break
 
-        if not found and lbl in target_labels:
-            extracted[lbl] = {
-                "Raw": val.strip(), "Corrected": normalize(val),
-                "Confidence": conf, "Schema": normalize(lbl)
+        if not found and label in target_labels:
+            extracted[label] = {
+                "Raw": value.strip(), "Corrected": normalize(value),
+                "Confidence": conf, "Schema": normalize(label)
             }
         i += 1
 
-    # Fill missing keys
     fields = []
     for label in target_labels:
-        data = extracted.get(label, {
+        f = extracted.get(label, {
             "Raw": "", "Corrected": "", "Confidence": 0.0, "Schema": normalize(label)
         })
-        fields.append({"Label": label, **data})
+        fields.append({"Label": label, **f})
     return fields
 def extract_table(doc):
     tokens = []
@@ -98,8 +96,8 @@ def extract_table(doc):
         for token in page.tokens:
             txt = token.layout.text_anchor.content or ""
             box = token.layout.bounding_poly.normalized_vertices
-            y = sum(v.y for v in box) / len(box)
-            x = sum(v.x for v in box) / len(box)
+            y = sum(v.y for v in box)/len(box)
+            x = sum(v.x for v in box)/len(box)
             tokens.append({"text": normalize(txt), "y": y, "x": x})
     if not tokens: return []
 
@@ -121,7 +119,6 @@ def extract_table(doc):
         table.append({headers[i]: cells[i]["text"] if i < len(cells) else "" for i in range(len(headers))})
     return table
 
-# Greek month detection
 MONTH_MAP_GR = {
     "ΙΑΝΟΥΑΡΙΟΥ": "01", "ΙΑΝ": "01", "ΦΕΒΡΟΥΑΡΙΟΥ": "02", "ΦΕΒ": "02",
     "ΜΑΡΤΙΟΥ": "03", "ΜΑΡ": "03", "ΑΠΡΙΛΙΟΥ": "04", "ΑΠΡ": "04",
@@ -145,25 +142,79 @@ def convert_greek_month_dates(doc):
                     dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
     return sorted(set(dates))
 
-# UI and export
+# Streamlit App
+st.set_page_config(layout="wide", page_title="Greek Registry Parser")
+st.title("🏛️ Registry OCR — Validated Extraction")
+
+cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
+if cred:
+    with open("credentials.json", "wb") as f:
+        f.write(cred.read())
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
+    st.sidebar.success("✅ Credentials loaded")
+
+file = st.file_uploader("📎 Upload Registry Image", type=["jpg", "jpeg", "png"])
+if not file:
+    st.info("ℹ️ Please upload an image to begin")
+    st.stop()
+
+img_left = crop_left(Image.open(file))
+zones = split_zones(img_left)
+
+project_id = "heroic-gantry-380919"
+processor_id = "8f7f56e900fbb37e"
+location = "eu"
+target_labels = [
+    "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"
+]
+
+parsed_forms = []
+
+for i, zone_img in enumerate(zones, start=1):
+    st.header(f"📄 Form {i}")
+    st.image(zone_img, caption=f"🧾 Zone {i}", use_container_width=True)
+    doc = parse_docai(zone_img.copy(), project_id, processor_id, location)
+    if not doc: continue
+
+    fields = extract_fields(doc, target_labels)
+    table = extract_table(doc)
+    dates = convert_greek_month_dates(doc)
+    missing = [f["Label"] for f in fields if f["Raw"] == ""]
+    valid = len(missing) == 0
+
+    parsed_forms.append({
+        "Form": i, "Valid": valid,
+        "Missing": missing, "Fields": fields,
+        "Table": table, "Dates": dates
+    })
+
+    st.subheader("📋 Form Fields")
+    st.dataframe(pd.DataFrame(fields), use_container_width=True)
+    if not valid:
+        st.error(f"❌ Missing: {', '.join(missing)}")
+
+    if table:
+        st.subheader("🧾 Table")
+        st.dataframe(pd.DataFrame(table), use_container_width=True)
+    if dates:
+        st.subheader("📅 Dates")
+        st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
+
+# Final Export
 st.header("💾 Export Data")
 
 flat_fields, flat_tables, flat_dates = [], [], []
-
 for form in parsed_forms:
     flat_fields.extend([
-        {"Form": form["Form"], **field}
-        for field in form["Fields"]
+        {"Form": form["Form"], **field} for field in form["Fields"]
     ])
     if form.get("Table"):
         flat_tables.extend([
-            {"Form": form["Form"], **row}
-            for row in form["Table"]
+            {"Form": form["Form"], **row} for row in form["Table"]
         ])
     if form.get("Dates"):
         flat_dates.extend([
-            {"Form": form["Form"], "Standardized Date": date}
-            for date in form["Dates"]
+            {"Form": form["Form"], "Standardized Date": date} for date in form["Dates"]
         ])
 
 fields_df = pd.DataFrame(flat_fields)
