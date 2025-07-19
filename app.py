@@ -60,27 +60,40 @@ def estimate_confidence(label, text):
 def extract_field_from_box_with_vision(pil_img, box, label):
     try:
         x, y, bw, bh = box
-        if None in (x, y, bw, bh): return "", 0.0
+        if None in (x, y, bw, bh):
+            st.warning(f"⚠️ Skipping '{label}' — box contains None: {box}")
+            return "", 0.0
     except Exception:
+        st.warning(f"⚠️ Skipping '{label}' — invalid box format: {box}")
         return "", 0.0
 
     w, h = pil_img.size
-    x1, y1 = int(x * w), int(y * h)
-    x2, y2 = int((x + bw) * w), int((y + bh) * h)
+    try:
+        x1 = int(float(x) * w)
+        y1 = int(float(y) * h)
+        x2 = int(float(x + bw) * w)
+        y2 = int(float(y + bh) * h)
+    except Exception as e:
+        st.warning(f"⚠️ Invalid box values for '{label}': {box} — {e}")
+        return "", 0.0
 
     zone_rgb = pil_img.convert("RGB")
     cropped = zone_rgb.crop((x1, y1, x2, y2)).copy()
 
     buf = BytesIO()
-    cropped.save(buf, format="JPEG")
-    buf.seek(0)
+    try:
+        cropped.save(buf, format="JPEG")
+    except Exception as e:
+        st.warning(f"🛑 Could not save crop for '{label}': {e}")
+        return "", 0.0
 
+    buf.seek(0)
     client = vision.ImageAnnotatorClient()
     image = vision.Image(content=buf.read())
     response = client.text_detection(image=image)
 
     if response.error.message:
-        st.warning(f"🛑 Vision API Error: {response.error.message}")
+        st.warning(f"🛑 Vision API Error for '{label}': {response.error.message}")
         return "", 0.0
 
     desc = response.text_annotations[0].description.strip() if response.text_annotations else ""
@@ -113,7 +126,7 @@ if not uploaded_image:
     st.info("ℹ️ Please upload a registry image to continue.")
     st.stop()
 
-# Image preprocessing
+# Preprocess image
 original = Image.open(uploaded_image)
 cropped = crop_left(trim_whitespace(original))
 zones, bounds = split_zones_fixed(cropped, overlap)
@@ -129,33 +142,30 @@ target_labels = [
 
 forms_parsed = []
 
-# Main loop: one form per zone
+# Zone loop
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     zone_width, zone_height = zone.size
 
-    # Prefill fallback box editor
+    # Prefill fallback table
     existing = manual_boxes_per_form.get(str(idx), {})
     prefill_rows = []
     for label in target_labels:
         box = existing.get(label, (None, None, None, None))
         try:
             x_raw, y_raw, w_raw, h_raw = [float(v) for v in box]
-            already_normalized = all(0.0 <= val <= 1.0 for val in (x_raw, y_raw, w_raw, h_raw))
-
-            if normalize_input and not already_normalized:
+            normalized = all(0.0 <= val <= 1.0 for val in (x_raw, y_raw, w_raw, h_raw))
+            if normalize_input and not normalized:
                 x = x_raw / zone_width
                 y = y_raw / zone_height
                 w = w_raw / zone_width
                 h = h_raw / zone_height
             else:
                 x, y, w, h = x_raw, y_raw, w_raw, h_raw
-
-            if any(val <= 0 or val > 1 for val in (w, h)):
-                raise ValueError("Box dimensions out of bounds")
+            if any(val is None or val <= 0 or val > 1 for val in (x, y, w, h)):
+                raise ValueError("Invalid box dimensions")
         except Exception:
             x, y, w, h = None, None, None, None
-
         prefill_rows.append({"Label": label, "X": x, "Y": y, "Width": w, "Height": h})
 
     box_editor = st.data_editor(
@@ -165,7 +175,7 @@ for idx, zone in enumerate(zones, start=1):
         key=f"editor_{idx}"
     )
 
-    # Capture edited boxes
+    # Store updated fallback boxes
     manual_boxes_per_form[str(idx)] = {}
     for _, row in box_editor.iterrows():
         label = row["Label"]
@@ -173,7 +183,7 @@ for idx, zone in enumerate(zones, start=1):
         if all(val is not None for val in (x, y, w, h)):
             manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
 
-    # 🟣 Overlay fallback boxes (always attempt)
+    # 🟣 Always attempt bounding box overlay
     overlay = zone.copy()
     draw = ImageDraw.Draw(overlay)
     w, h = overlay.size
@@ -184,20 +194,21 @@ for idx, zone in enumerate(zones, start=1):
 
     for label, box in manual_boxes_per_form.get(str(idx), {}).items():
         try:
-            x, y, bw, bh = box
-            if None in (x, y, bw, bh): raise ValueError()
+            x, y, bw, bh = [float(v) for v in box]
+            if any(val is None for val in (x, y, bw, bh)):
+                raise ValueError("Box contains None")
             x1, y1 = int(x * w), int(y * h)
             x2, y2 = int((x + bw) * w), int((y + bh) * h)
             draw.rectangle([(x1, y1), (x2, y2)], outline="purple", width=2)
             draw.text((x1, y1 - 16), label, fill="purple", font=font or None)
-        except Exception:
-            st.warning(f"⚠️ Skipping '{label}' — invalid box: {box}")
+        except Exception as e:
+            st.warning(f"⚠️ Skipping '{label}' — {e}")
     st.image(overlay, caption=f"🟣 Fallback Boxes for Form {idx}", use_container_width=True)
 
     # 🔍 Document AI parse
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     if not doc:
-        st.error(f"❌ Document AI returned no result for Form {idx}")
+        st.error(f"❌ No Document AI result for Form {idx}")
         continue
 
     extracted = {}
@@ -214,7 +225,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # 🩹 Merge AI & Vision fallback
+    # 🩹 Merge with fallback Vision OCR
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"]:
@@ -290,13 +301,16 @@ if invalid_forms:
 # 📈 Confidence Overview
 st.header("📈 Confidence Overview")
 
-avg_conf = round(df["Confidence"].mean(), 2)
-st.markdown(f"📌 Average confidence across all fields: **{avg_conf}%**")
+if not df.empty:
+    avg_conf = round(df["Confidence"].mean(), 2)
+    st.markdown(f"📌 Average confidence across all fields: **{avg_conf}%**")
 
-low_conf_fields = df[df["Confidence"] < 50.0]
-if not low_conf_fields.empty:
-    st.subheader("🔍 Fields with Low Confidence (< 50%)")
-    st.dataframe(low_conf_fields, use_container_width=True)
+    low_conf_fields = df[df["Confidence"] < 50.0]
+    if not low_conf_fields.empty:
+        st.subheader("🔍 Fields with Low Confidence (< 50%)")
+        st.dataframe(low_conf_fields, use_container_width=True)
+else:
+    st.markdown("⚠️ No field data parsed yet.")
 
 # 💾 Fallback Box Layout Export
 if manual_boxes_per_form:
