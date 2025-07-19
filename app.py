@@ -54,7 +54,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Vision OCR fallback
+# Vision AI fallback
 def extract_field_from_box_with_vision(pil_img, box):
     w, h = pil_img.size
     x, y, bw, bh = box
@@ -90,8 +90,9 @@ def draw_fallback_boxes(img, labels, box_map):
             draw.rectangle([(x1, y1), (x2, y2)], outline="purple", width=2)
             draw.text((x1, y1 - 16), label, fill="purple", font=font or None)
     return img
-# UI setup
+# Title and layout
 st.title("📜 Greek Registry Parser — Document AI + Vision AI")
+st.set_page_config(layout="wide")
 
 # Sidebar controls
 overlap = st.sidebar.slider("🔄 Zone overlap height", 0, 120, 60, step=10)
@@ -124,7 +125,7 @@ cropped = crop_left(trim_whitespace(original))
 zones, bounds = split_zones_fixed(cropped, overlap)
 st.image(cropped, caption="🖼️ Registry (Left Side Only)", use_container_width=True)
 
-# OCR configuration
+# Config
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
@@ -135,7 +136,7 @@ target_labels = [
 
 forms_parsed = []
 
-# Zone parsing loop
+# Processing form zones
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
@@ -156,7 +157,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # Combine fields with fallback
+    # Fallback extraction via box
     form_boxes = manual_boxes_per_form.get(str(idx), {})
     fields = []
     for label in target_labels:
@@ -187,13 +188,14 @@ for idx, zone in enumerate(zones, start=1):
         overlay = draw_fallback_boxes(zone.copy(), fallback_labels, form_boxes)
         st.image(overlay, caption="🖼️ Vision AI Fallback Boxes", use_container_width=True)
 
-    # Drawable canvas for manual labeling
+    # Drawable canvas with safe NumPy conversion
     st.subheader("✍️ Draw or Edit Fallback Boxes")
-
-    zone_array = np.array(zone.copy())
-    if zone_array is None or zone_array.size == 0:
-        st.error("🛑 Zone image not valid for canvas.")
-        st.stop()
+    try:
+        zone_array = np.array(zone.convert("RGB"))
+        assert zone_array.ndim in [2, 3] and zone_array.size > 0
+    except Exception as e:
+        st.error(f"🛑 Canvas failed: invalid image array ({e})")
+        continue
 
     canvas_result = st_canvas(
         background_image=zone_array,
@@ -206,6 +208,7 @@ for idx, zone in enumerate(zones, start=1):
         display_toolbar=True
     )
 
+    # Capture boxes
     if canvas_result.json_data and canvas_result.json_data.get("objects"):
         manual_boxes_per_form[str(idx)] = {}
         for obj in canvas_result.json_data["objects"]:
@@ -222,8 +225,8 @@ for idx, zone in enumerate(zones, start=1):
         "Fields": fields,
         "Missing": [f["Label"] for f in fields if not f["Raw"].strip()]
     })
-# 📤 Export Parsed Fields
-st.header("📦 Export Parsed Data")
+# 📦 Export Parsed Field Data
+st.header("📤 Export Parsed Fields")
 
 flat_fields = []
 for form in forms_parsed:
@@ -252,8 +255,8 @@ st.download_button(
     mime="application/json"
 )
 
-# 📊 Summary Report
-st.header("📊 Form Parsing Summary")
+# 📊 Form-Level Summary
+st.header("📊 Parsing Summary")
 
 valid_forms = [f for f in forms_parsed if not f["Missing"]]
 invalid_forms = [f for f in forms_parsed if f["Missing"]]
@@ -262,17 +265,17 @@ st.markdown(f"✅ Fully parsed forms: **{len(valid_forms)}**")
 st.markdown(f"❌ Forms with missing fields: **{len(invalid_forms)}**")
 
 if invalid_forms:
-    st.subheader("🚨 Missing Fields per Form")
+    st.subheader("🚨 Missing Fields by Form")
     for f in invalid_forms:
         st.markdown(f"- **Form {f['Form']}** → Missing: `{', '.join(f['Missing'])}`")
 
-# 💾 Export Fallback Box Maps
+# 🧠 Export Fallback Layouts
 if manual_boxes_per_form:
-    st.header("🧠 Export Fallback Box Layouts")
+    st.header("🧠 Export Fallback Box Maps")
     st.json(manual_boxes_per_form)
 
     st.download_button(
-        label="💾 Download Box Maps as JSON",
+        label="💾 Download Fallback Boxes as JSON",
         data=json.dumps(manual_boxes_per_form, indent=2, ensure_ascii=False),
         file_name="manual_boxes_per_form.json",
         mime="application/json"
