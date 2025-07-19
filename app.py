@@ -170,7 +170,7 @@ for idx, zone in enumerate(zones, start=1):
         "Height": [None]*len(target_labels)
     })
 
-    box_editor = st.experimental_data_editor(
+    box_editor = st.data_editor(
         default_rows,
         use_container_width=True,
         num_rows="dynamic",
