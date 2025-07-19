@@ -112,7 +112,12 @@ def extract_field_from_box_with_vision(pil_img, box, label):
 
     desc = response.text_annotations[0].description.strip() if response.text_annotations else ""
     return desc, estimate_confidence(label, desc)
-# ... setup code for layout, credentials, box loading ...
+# 🧱 Ensure zones are initialized
+if "zones" not in locals() or not zones:
+    st.error("❌ Zones were not initialized. Please upload and process an image first.")
+    st.stop()
+
+forms_parsed = []
 
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
@@ -158,7 +163,7 @@ for idx, zone in enumerate(zones, start=1):
             form_id = str(z)
             if not manual_boxes_per_form.get(form_id):
                 manual_boxes_per_form[form_id] = updated_boxes
-        st.info("📐 Applied updated Form 1 layout to forms missing boxes")
+        st.info("📐 Applied Form 1 layout to forms missing boxes")
 
     overlay = zone.copy()
     draw = ImageDraw.Draw(overlay)
@@ -195,10 +200,12 @@ for idx, zone in enumerate(zones, start=1):
             for t in target_labels:
                 if normalize(label) == normalize(t):
                     corrected = normalize(fix_cyrillic_greek(fix_latin_greek(value)))
+                    issues = validate_registry_field(t, corrected, conf)
                     extracted[t] = {
                         "Raw": value.strip(),
                         "Corrected": corrected,
-                        "Confidence": conf
+                        "Confidence": conf,
+                        "Issues": issues
                     }
 
     fields = []
@@ -208,17 +215,20 @@ for idx, zone in enumerate(zones, start=1):
                 "Label": label,
                 "Raw": extracted[label]["Raw"],
                 "Corrected": extracted[label]["Corrected"],
-                "Confidence": extracted[label]["Confidence"]
+                "Confidence": extracted[label]["Confidence"],
+                "Issues": extracted[label]["Issues"]
             })
         else:
             box = manual_boxes_per_form[str(idx)].get(label)
             fallback_text, confidence = extract_field_from_box_with_vision(zone, box, label) if box else ("", 0.0)
             corrected = normalize(fix_cyrillic_greek(fix_latin_greek(fallback_text)))
+            issues = validate_registry_field(label, corrected, confidence)
             fields.append({
                 "Label": label,
                 "Raw": fallback_text,
                 "Corrected": corrected,
-                "Confidence": confidence
+                "Confidence": confidence,
+                "Issues": issues
             })
 
     st.subheader("🧾 Parsed Fields")
@@ -240,7 +250,8 @@ for form in forms_parsed:
             "Label": field["Label"],
             "Raw": field["Raw"],
             "Corrected": field["Corrected"],
-            "Confidence": field["Confidence"]
+            "Confidence": field["Confidence"],
+            "Issues": field.get("Issues", [])
         })
 
 df = pd.DataFrame(flat_fields)
@@ -287,6 +298,15 @@ if not df.empty:
         st.dataframe(low_conf_fields, use_container_width=True)
 else:
     st.markdown("⚠️ No field data available to summarize.")
+
+# 🚨 Validation Issue Summary
+st.header("🚨 Validation Issues")
+
+problematic_fields = [f for f in flat_fields if f.get("Issues")]
+if problematic_fields:
+    st.dataframe(pd.DataFrame(problematic_fields), use_container_width=True)
+else:
+    st.markdown("✅ No validation issues detected.")
 
 # 💾 Fallback Box Layout Export
 if manual_boxes_per_form:
