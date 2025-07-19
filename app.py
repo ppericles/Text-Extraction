@@ -214,6 +214,41 @@ fallback_regions = {
     "ΚΥΡΙΟΝ ΟΝΟΜΑ":     (0.05, 0.43, 0.4, 0.07)
 }
 
+def extract_table(doc):
+    tokens = []
+    for page in doc.pages:
+        for token in page.tokens:
+            txt = token.layout.text_anchor.content or ""
+            box = token.layout.bounding_poly.normalized_vertices
+            y = sum(v.y for v in box) / len(box)
+            x = sum(v.x for v in box) / len(box)
+            tokens.append({"text": normalize(txt), "y": y, "x": x})
+    if not tokens:
+        return []
+
+    tokens.sort(key=lambda t: t["y"])
+    rows, current, threshold = [], [], 0.01
+    for tok in tokens:
+        if not current or abs(tok["y"] - current[-1]["y"]) < threshold:
+            current.append(tok)
+        else:
+            rows.append(current)
+            current = [tok]
+    if current:
+        rows.append(current)
+    if len(rows) < 2:
+        return []
+
+    headers = [t["text"] for t in sorted(rows[0], key=lambda t: t["x"])]
+    table = []
+    for row in rows[1:]:
+        cells = sorted(row, key=lambda t: t["x"])
+        table.append({
+            headers[i]: cells[i]["text"] if i < len(cells) else ""
+            for i in range(len(headers))
+        })
+    return table
+
 # Calibration override storage
 custom_positions = {}
 
