@@ -6,8 +6,16 @@ from io import BytesIO
 from google.cloud import documentai_v1 as documentai
 from google.cloud import vision
 
+def fix_latin_greek(text):
+    replacements = {
+        "A": "Α", "B": "Β", "E": "Ε", "H": "Η", "K": "Κ", "M": "Μ",
+        "N": "Ν", "O": "Ο", "P": "Ρ", "T": "Τ", "X": "Χ", "Y": "Υ"
+    }
+    return "".join(replacements.get(c, c) for c in text)
+
 def normalize(text):
     if not text: return ""
+    text = fix_latin_greek(text)
     text = unicodedata.normalize("NFD", text)
     text = ''.join(c for c in text if unicodedata.category(c) != "Mn")
     text = re.sub(r"[^\w\sΑ-ΩάέήίόύώΆΈΉΊΌΎΏ]", "", text)
@@ -114,8 +122,6 @@ if uploaded_box_map:
     try:
         manual_boxes_per_form = json.load(uploaded_box_map)
         st.sidebar.success(f"✅ Loaded box map for {len(manual_boxes_per_form)} form(s)")
-
-        # 🧠 Propagate Form 1 layout to forms with no box defined
         if "1" in manual_boxes_per_form:
             for z in range(2, 4):  # assuming 3 zones
                 form_id = str(z)
@@ -150,7 +156,6 @@ for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     zone_width, zone_height = zone.size
 
-    # Prefill box table
     existing = manual_boxes_per_form.get(str(idx), {})
     prefill_rows = []
     for label in target_labels:
@@ -178,7 +183,6 @@ for idx, zone in enumerate(zones, start=1):
         key=f"editor_{idx}"
     )
 
-    # Save boxes
     manual_boxes_per_form[str(idx)] = {}
     for _, row in box_editor.iterrows():
         label = row["Label"]
@@ -186,16 +190,14 @@ for idx, zone in enumerate(zones, start=1):
         if all(val is not None for val in (x, y, w, h)):
             manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
 
-    # 🧠 After editing Form 1, apply to missing forms
     if idx == 1:
         updated_boxes = manual_boxes_per_form.get("1", {})
         for z in range(2, len(zones) + 1):
             form_id = str(z)
             if not manual_boxes_per_form.get(form_id):
                 manual_boxes_per_form[form_id] = updated_boxes
-        st.info("📐 Applied Form 1 layout to undefined forms")
+        st.info("📐 Applied updated Form 1 layout to forms missing boxes")
 
-    # 🟣 Overlay fallback boxes
     overlay = zone.copy()
     draw = ImageDraw.Draw(overlay)
     w, h = overlay.size
@@ -207,8 +209,6 @@ for idx, zone in enumerate(zones, start=1):
     for label, box in manual_boxes_per_form.get(str(idx), {}).items():
         try:
             x, y, bw, bh = [float(v) for v in box]
-            if any(val is None for val in (x, y, bw, bh)):
-                raise ValueError("Box contains None")
             x1 = int(x * w)
             y1 = int(y * h)
             x2 = int((x + bw) * w)
@@ -219,7 +219,6 @@ for idx, zone in enumerate(zones, start=1):
             st.warning(f"⚠️ Skipping '{label}' — {e}")
     st.image(overlay, caption=f"🟣 Fallback Boxes for Form {idx}", use_container_width=True)
 
-    # Document AI parse
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     if not doc:
         st.error(f"❌ No Document AI result for Form {idx}")
@@ -233,13 +232,13 @@ for idx, zone in enumerate(zones, start=1):
             conf = round(f.field_value.confidence * 100, 2)
             for t in target_labels:
                 if normalize(label) == normalize(t):
+                    corrected = normalize(fix_latin_greek(value))
                     extracted[t] = {
                         "Raw": value.strip(),
-                        "Corrected": normalize(value),
+                        "Corrected": corrected,
                         "Confidence": conf
                     }
 
-    # Merge with fallback
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"]:
@@ -252,10 +251,11 @@ for idx, zone in enumerate(zones, start=1):
         else:
             box = manual_boxes_per_form[str(idx)].get(label)
             fallback_text, confidence = extract_field_from_box_with_vision(zone, box, label) if box else ("", 0.0)
+            corrected = normalize(fix_latin_greek(fallback_text))
             fields.append({
                 "Label": label,
                 "Raw": fallback_text,
-                "Corrected": normalize(fallback_text),
+                "Corrected": corrected,
                 "Confidence": confidence
             })
 
