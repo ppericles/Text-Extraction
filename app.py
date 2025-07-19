@@ -143,8 +143,8 @@ for idx, zone in enumerate(zones, start=1):
         except:
             font = None
         for label, box in manual_boxes_per_form[str(idx)].items():
-            if not box or any(v is None for v in box):
-                st.warning(f"⚠️ Skipping '{label}' — incomplete box definition.")
+            if not isinstance(box, (list, tuple)) or len(box) != 4 or any(v is None for v in box):
+                st.warning(f"⚠️ Skipping '{label}' — invalid box format: {box}")
                 continue
             x, y, bw, bh = box
             x1, y1 = int(x * w), int(y * h)
