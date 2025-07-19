@@ -354,8 +354,13 @@ for form in forms_parsed:
                 key=f"final_{form_id}_{label}"
             )
 
-            if f.get("Thumb") and f.get("Issues"):
-                st.image(f["Thumb"], caption=f"{label} → {', '.join(f['Issues'])}", width=200)
+            thumb = f.get("Thumb")
+            if thumb and thumb.size != (0, 0):
+                if thumb.mode != "RGB":
+                    thumb = thumb.convert("RGB")
+                st.image(thumb, caption=f"{label} → {', '.join(f.get('Issues', []))}", width=200)
+            elif f.get("Issues"):
+                st.warning(f"⚠️ Thumbnail unavailable for {label}")
 
     flat_fields.extend([
         {
@@ -415,24 +420,24 @@ else:
     st.markdown("✅ No issues flagged.")
 
 # 💡 Suggestions Review
-st.header("💡 Suggested Corrections")
+st.header("💡 Suggested Corrections Applied")
 
 suggested = [f for f in flat_fields if f.get("Suggestion")]
 if suggested:
     for f in suggested:
         st.markdown(f"**Form {f['Form']} — {f['Label']}**")
-        st.markdown(f"🔍 Parsed: `{f['Corrected']}`")
-        st.markdown(f"💡 Suggested: `{f['Suggestion']}` → Final: `{f['Final']}`")
+        st.markdown(f"🔍 Corrected: `{f['Corrected']}`")
+        st.markdown(f"💡 Suggestion Applied: `{f['Final']}`")
         st.markdown("---")
 else:
-    st.markdown("🟢 No suggestions were applied.")
+    st.markdown("🟢 No suggestions applied.")
 
 # 💾 Fallback Box Layout Export
 if manual_boxes_per_form:
     st.header("📦 Fallback Box Layout Map")
     st.json(manual_boxes_per_form)
     st.download_button(
-        label="💾 Download Box Layout as JSON",
+        label="💾 Download Box Map as JSON",
         data=json.dumps(manual_boxes_per_form, indent=2, ensure_ascii=False),
         file_name="manual_boxes_per_form.json",
         mime="application/json"
