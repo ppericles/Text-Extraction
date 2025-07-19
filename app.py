@@ -47,12 +47,25 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-def extract_field_from_box_with_vision(pil_img, box):
+# 🧠 Smart confidence estimator
+def estimate_confidence(label, text):
+    text = text.strip()
+    if not text: return 0.0
+    if label == "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ":
+        return 90.0 if text.isdigit() else 40.0
+    elif label in ["ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"]:
+        is_greekish = re.match(r"^[Α-ΩΆΈΉΊΌΎΏα-ωάέήίόύώ\s\-]{3,}$", text)
+        return 75.0 if is_greekish else 30.0
+    return 50.0  # Generic fallback
+
+# 🔍 Vision OCR with heuristics
+def extract_field_from_box_with_vision(pil_img, box, label):
     try:
         x, y, bw, bh = box
-        if None in (x, y, bw, bh): return ""
+        if None in (x, y, bw, bh): return "", 0.0
     except Exception:
-        return ""
+        return "", 0.0
+
     w, h = pil_img.size
     x1, y1 = int(x * w), int(y * h)
     x2, y2 = int((x + bw) * w), int((y + bh) * h)
@@ -65,8 +78,10 @@ def extract_field_from_box_with_vision(pil_img, box):
     response = client.text_detection(image=image)
     if response.error.message:
         st.warning(f"🛑 Vision API Error: {response.error.message}")
-        return ""
-    return response.text_annotations[0].description.strip() if response.text_annotations else ""
+        return "", 0.0
+
+    desc = response.text_annotations[0].description.strip() if response.text_annotations else ""
+    return desc, estimate_confidence(label, desc)
 # App layout & sidebar controls
 st.set_page_config(layout="wide", page_title="Registry Parser")
 st.title("📜 Greek Registry Parser — AI + Manual Fallbacks")
@@ -87,7 +102,7 @@ if uploaded_box_map:
     except Exception as e:
         st.sidebar.error(f"📛 Failed to load box map: {e}")
 
-# 🆕 Normalize checkbox
+# 📏 Normalization toggle
 normalize_input = st.checkbox("📏 Normalize pixel box map automatically", value=True)
 
 uploaded_image = st.file_uploader("🖼️ Upload Registry Image", type=["jpg", "jpeg", "png"])
@@ -105,7 +120,6 @@ st.image(cropped, caption="🖼️ Trimmed Registry (Left Side)", use_container_
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
-
 target_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"
 ]
@@ -120,7 +134,6 @@ for idx, zone in enumerate(zones, start=1):
     # Prefill fallback box table
     existing = manual_boxes_per_form.get(str(idx), {})
     prefill_rows = []
-
     for label in target_labels:
         box = existing.get(label, (None, None, None, None))
         try:
@@ -143,6 +156,7 @@ for idx, zone in enumerate(zones, start=1):
         key=f"editor_{idx}"
     )
 
+    # Capture editor results
     manual_boxes_per_form[str(idx)] = {}
     for _, row in box_editor.iterrows():
         label = row["Label"]
@@ -150,7 +164,7 @@ for idx, zone in enumerate(zones, start=1):
         if all(val is not None for val in (x, y, w, h)):
             manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
 
-    # Purple overlay display
+    # Overlay visualization
     if manual_boxes_per_form[str(idx)]:
         overlay = zone.copy()
         draw = ImageDraw.Draw(overlay)
@@ -191,7 +205,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # Merge results with fallback recovery
+    # Combine with fallback + smart confidence
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"]:
@@ -203,12 +217,12 @@ for idx, zone in enumerate(zones, start=1):
             })
         else:
             box = manual_boxes_per_form[str(idx)].get(label)
-            fallback_text = extract_field_from_box_with_vision(zone, box) if box else ""
+            fallback_text, confidence = extract_field_from_box_with_vision(zone, box, label) if box else ("", 0.0)
             fields.append({
                 "Label": label,
                 "Raw": fallback_text,
                 "Corrected": normalize(fallback_text),
-                "Confidence": 0.0
+                "Confidence": confidence
             })
 
     st.subheader("🧾 Parsed Fields")
@@ -249,7 +263,7 @@ st.download_button(
     mime="application/json"
 )
 
-# 📊 Summary Dashboard
+# 📊 Parsing Summary
 st.header("📊 Parsing Summary")
 
 valid_forms = [f for f in forms_parsed if not f["Missing"]]
@@ -264,9 +278,20 @@ if invalid_forms:
         missing_list = ", ".join(f["Missing"])
         st.markdown(f"- **Form {f['Form']}** → Missing: `{missing_list}`")
 
+# 🧠 Confidence Heatmap (Optional Insight)
+st.header("📈 Confidence Overview")
+
+avg_confidence = df["Confidence"].mean()
+st.markdown(f"📌 Average confidence across all fields: **{round(avg_confidence, 2)}%**")
+
+low_conf_fields = df[df["Confidence"] < 50.0]
+if not low_conf_fields.empty:
+    st.subheader("🔍 Fields with Low Confidence (< 50%)")
+    st.dataframe(low_conf_fields, use_container_width=True)
+
 # 💾 Export Fallback Box Layouts
 if manual_boxes_per_form:
-    st.header("🧠 Export Fallback Box Map")
+    st.header("📦 Fallback Box Layout Map")
     st.json(manual_boxes_per_form)
 
     st.download_button(
