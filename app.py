@@ -249,6 +249,29 @@ def extract_table(doc):
         })
     return table
 
+def convert_greek_month_dates(doc):
+    MONTH_MAP_GR = {
+        "ΙΑΝΟΥΑΡΙΟΥ": "01", "ΙΑΝ": "01", "ΦΕΒΡΟΥΑΡΙΟΥ": "02", "ΦΕΒ": "02",
+        "ΜΑΡΤΙΟΥ": "03", "ΜΑΡ": "03", "ΑΠΡΙΛΙΟΥ": "04", "ΑΠΡ": "04",
+        "ΜΑΪΟΥ": "05", "ΜΑΪ": "05", "ΙΟΥΝΙΟΥ": "06", "ΙΟΥΝ": "06",
+        "ΙΟΥΛΙΟΥ": "07", "ΙΟΥΛ": "07", "ΑΥΓΟΥΣΤΟΥ": "08", "ΑΥΓ": "08",
+        "ΣΕΠΤΕΜΒΡΙΟΥ": "09", "ΣΕΠ": "09", "ΟΚΤΩΒΡΙΟΥ": "10", "ΟΚΤ": "10",
+        "ΝΟΕΜΒΡΙΟΥ": "11", "ΝΟΕ": "11", "ΔΕΚΕΜΒΡΙΟΥ": "12", "ΔΕΚ": "12"
+    }
+    dates = []
+    if not doc or not doc.pages:
+        return dates
+    for page in doc.pages:
+        for token in page.tokens:
+            txt = token.layout.text_anchor.content or ""
+            match = re.search(r"(\d{1,2})\s+([Α-ΩΪΫ]{3,})\s+(\d{2,4})", normalize(txt))
+            if match:
+                d, m, y = match.groups()
+                m_num = MONTH_MAP_GR.get(m.upper())
+                if m_num:
+                    dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
+    return sorted(set(dates))
+
 # Calibration override storage
 custom_positions = {}
 
