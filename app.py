@@ -435,7 +435,13 @@ for form in forms_parsed:
             # 🖼️ Show thumbnail if problematic
             if f.get("Thumb") and f.get("Issues"):
                 thumb = f["Thumb"].convert("RGB") if f["Thumb"].mode != "RGB" else f["Thumb"]
-                st.image(thumb, caption=f"{label} → {', '.join(f['Issues'])}", width=220)
+                # ✅ Safe thumbnail display
+                if thumb and thumb.size != (0, 0):
+                try:
+                    safe_thumb = thumb.convert("RGB")
+                    st.image(safe_thumb, caption=f"{label} → {', '.join(f['Issues'])}", width=220)
+                except Exception as e:
+                    st.warning(f"⚠️ Couldn't display thumbnail for '{label}': {e}")
 
     # 📦 Collect cleaned field data
     flat_fields.extend([
