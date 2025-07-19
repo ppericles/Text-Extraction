@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageDraw
 import os, json, unicodedata
 import pandas as pd
 import re
@@ -12,19 +12,19 @@ def normalize(text):
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Trim whitespace around content
+# Trim white space around content
 def trim_whitespace(image, threshold=245):
     img_gray = image.convert("L")
     bbox = img_gray.point(lambda p: p < threshold and 255).getbbox()
     return image.crop(bbox) if bbox else image
 
-# Crop to left half
+# Crop image to left half
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Slice image vertically with overlap
-def split_zones(image, overlap_px):
+# Slice fixed vertical zones with overlap
+def split_zones_fixed(image, overlap_px):
     w, h = image.size
     thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
     bounds = [
@@ -32,10 +32,34 @@ def split_zones(image, overlap_px):
         (thirds[1] - overlap_px, thirds[2] + overlap_px),
         (thirds[2] - overlap_px, thirds[3])
     ]
-    zones = []
-    for t, b in bounds:
-        zones.append(image.crop((0, max(0, t), w, min(h, b))).convert("RGB"))
-    return zones
+    return [image.crop((0, max(0, t), w, min(h, b))).convert("RGB") for t, b in bounds], bounds
+
+# Auto-detect horizontal gaps to segment forms
+def split_zones_auto(image, min_gap_height=20):
+    img_gray = image.convert("L")
+    histogram = [sum(img_gray.getpixel((x, y)) < 240 for x in range(image.width)) for y in range(image.height)]
+    gaps = [i for i in range(1, len(histogram)) if histogram[i] < 5 and histogram[i-1] >= 5]
+    chunk_bounds = []
+    if not gaps: return [image.copy()], [(0, image.height)]
+
+    start = 0
+    for gap in gaps:
+        if gap - start > min_gap_height:
+            chunk_bounds.append((start, gap))
+            start = gap + 1
+    if start < image.height:
+        chunk_bounds.append((start, image.height))
+
+    zones = [image.crop((0, t, image.width, b)).convert("RGB") for t, b in chunk_bounds]
+    return zones, chunk_bounds
+
+# Visual preview of zone boundaries
+def show_zone_overlay(image, bounds, color="red", width=4):
+    preview = image.copy()
+    draw = ImageDraw.Draw(preview)
+    for top, bottom in bounds:
+        draw.rectangle([(0, top), (image.width, bottom)], outline=color, width=width)
+    return preview
 
 # Send image to Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
@@ -54,10 +78,9 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract target fields with confidence
+# Extract fields from form
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
-
     extracted = {}
     items = []
     for page in doc.pages:
@@ -80,7 +103,6 @@ def extract_fields(doc, target_labels):
             merged_label += " " + items[j]["Label"]
             merged_value += " " + items[j]["Value"]
             merged_conf = round((merged_conf + items[j]["Confidence"]) / 2, 2)
-
             if normalize(merged_label) in [normalize(t) for t in target_labels]:
                 extracted[merged_label.strip()] = {
                     "Raw": merged_value.strip(),
@@ -161,17 +183,17 @@ def convert_greek_month_dates(doc):
 
 # Streamlit UI
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
-st.title("🏛️ Registry OCR — Validated Extraction")
+st.title("🏛️ Registry OCR — Interactive Zone Extraction")
 
 # Sidebar controls
 overlap = st.sidebar.slider("🧩 Overlap between form zones (pixels)", 0, 120, value=60, step=10)
+auto_mode = st.sidebar.checkbox("🔍 Use auto-detected zones", value=False)
 cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred:
     with open("credentials.json", "wb") as f: f.write(cred.read())
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
-# Upload image
 file = st.file_uploader("📎 Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not file:
     st.info("ℹ️ Upload an image to begin")
@@ -180,7 +202,14 @@ if not file:
 image = Image.open(file)
 trimmed = trim_whitespace(image)
 img_left = crop_left(trimmed)
-zones = split_zones(img_left, overlap_px=overlap)
+
+if auto_mode:
+    zones, bounds = split_zones_auto(img_left)
+else:
+    zones, bounds = split_zones_fixed(img_left, overlap_px=overlap)
+
+preview = show_zone_overlay(img_left, bounds)
+st.image(preview, caption="📐 Zone Preview", use_container_width=True)
 
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
