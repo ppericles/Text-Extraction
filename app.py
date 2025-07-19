@@ -12,21 +12,26 @@ def normalize(text):
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Crop to left half of image
+# Crop to left side of image
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Split into vertical zones with overlap
-def split_zones(image, overlap=60):
+# Even vertical slicing with adjustable overlap
+def split_zones(image, overlap_px):
     w, h = image.size
-    one_third = h // 3
+    thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
     bounds = [
-        (0, one_third + overlap),
-        (one_third - overlap, 2 * one_third + overlap),
-        (2 * one_third - overlap, h)
+        (thirds[0], thirds[1] + overlap_px),
+        (thirds[1] - overlap_px, thirds[2] + overlap_px),
+        (thirds[2] - overlap_px, thirds[3])
     ]
-    return [image.crop((0, max(0, t), w, min(h, b))).convert("RGB") for t, b in bounds]
+    zones = []
+    for t, b in bounds:
+        top = max(0, t)
+        bottom = min(h, b)
+        zones.append(image.crop((0, top, w, bottom)).convert("RGB"))
+    return zones
 
 # Send image to Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
@@ -45,32 +50,32 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract target fields with confidence scores
+# Extract fields with label and confidence
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
 
     extracted = {}
-    raw_items = []
+    items = []
     for page in doc.pages:
         for f in page.form_fields:
-            lbl = f.field_name.text_anchor.content or ""
-            val = f.field_value.text_anchor.content or ""
+            label = f.field_name.text_anchor.content or ""
+            value = f.field_value.text_anchor.content or ""
             conf = round(f.field_value.confidence * 100, 2)
-            raw_items.append({"Label": lbl.strip(), "Value": val.strip(), "Confidence": conf})
+            items.append({"Label": label.strip(), "Value": value.strip(), "Confidence": conf})
 
     i = 0
-    while i < len(raw_items):
-        label = raw_items[i]["Label"]
-        value = raw_items[i]["Value"]
-        conf = raw_items[i]["Confidence"]
+    while i < len(items):
+        label = items[i]["Label"]
+        value = items[i]["Value"]
+        conf = items[i]["Confidence"]
         merged_label = label
         merged_value = value
         merged_conf = conf
 
-        for j in range(i + 1, len(raw_items)):
-            merged_label += " " + raw_items[j]["Label"]
-            merged_value += " " + raw_items[j]["Value"]
-            merged_conf = round((merged_conf + raw_items[j]["Confidence"]) / 2, 2)
+        for j in range(i + 1, len(items)):
+            merged_label += " " + items[j]["Label"]
+            merged_value += " " + items[j]["Value"]
+            merged_conf = round((merged_conf + items[j]["Confidence"]) / 2, 2)
 
             if normalize(merged_label).strip() in [normalize(t) for t in target_labels]:
                 extracted[merged_label.strip()] = {
@@ -150,10 +155,12 @@ def convert_greek_month_dates(doc):
                     dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
     return sorted(set(dates))
 
-# Streamlit App UI
+# Streamlit UI
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
 st.title("🏛️ Registry OCR — Validated Extraction")
 
+# Interactive overlap slider
+overlap = st.sidebar.slider("🧩 Overlap between form zones (pixels)", min_value=0, max_value=120, value=60, step=10)
 cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred:
     with open("credentials.json", "wb") as f: f.write(cred.read())
@@ -166,7 +173,7 @@ if not file:
     st.stop()
 
 img_left = crop_left(Image.open(file))
-zones = split_zones(img_left, overlap=60)
+zones = split_zones(img_left, overlap_px=overlap)
 
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
@@ -213,7 +220,7 @@ for i, zone_img in enumerate(zones, start=1):
         st.subheader("📅 Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
 
-# Export Block
+# Export block
 st.header("💾 Export Data")
 
 flat_fields, flat_tables, flat_dates = [], [], []
