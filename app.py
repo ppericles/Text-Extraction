@@ -12,18 +12,28 @@ def normalize(text):
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Trim white space around content
-def trim_whitespace(image, threshold=245):
-    img_gray = image.convert("L")
-    bbox = img_gray.point(lambda p: p < threshold and 255).getbbox()
-    return image.crop(bbox) if bbox else image
+# Trim outer white space using intensity scan
+def trim_whitespace(image, intensity_threshold=240, buffer=10):
+    gray = image.convert("L")
+    pixels = gray.load()
+    w, h = gray.size
+    top = next((y for y in range(h) if any(pixels[x, y] < intensity_threshold for x in range(w))), 0)
+    bottom = next((y for y in reversed(range(h)) if any(pixels[x, y] < intensity_threshold for x in range(w))), h)
+    left = next((x for x in range(w) if any(pixels[x, y] < intensity_threshold for y in range(h))), 0)
+    right = next((x for x in reversed(range(w)) if any(pixels[x, y] < intensity_threshold for y in range(h))), w)
 
-# Crop image to left half
+    top = max(0, top - buffer)
+    bottom = min(h, bottom + buffer)
+    left = max(0, left - buffer)
+    right = min(w, right + buffer)
+    return image.crop((left, top, right, bottom))
+
+# Crop to left half of image
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Slice fixed vertical zones with overlap
+# Fixed vertical slicing with overlap
 def split_zones_fixed(image, overlap_px):
     w, h = image.size
     thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
@@ -32,34 +42,33 @@ def split_zones_fixed(image, overlap_px):
         (thirds[1] - overlap_px, thirds[2] + overlap_px),
         (thirds[2] - overlap_px, thirds[3])
     ]
-    return [image.crop((0, max(0, t), w, min(h, b))).convert("RGB") for t, b in bounds], bounds
+    zones = [image.crop((0, max(0, t), w, min(h, b))).convert("RGB") for t, b in bounds]
+    return zones, bounds
 
-# Auto-detect horizontal gaps to segment forms
+# Auto segment zones using horizontal gaps
 def split_zones_auto(image, min_gap_height=20):
-    img_gray = image.convert("L")
-    histogram = [sum(img_gray.getpixel((x, y)) < 240 for x in range(image.width)) for y in range(image.height)]
-    gaps = [i for i in range(1, len(histogram)) if histogram[i] < 5 and histogram[i-1] >= 5]
-    chunk_bounds = []
-    if not gaps: return [image.copy()], [(0, image.height)]
-
+    gray = image.convert("L")
+    w, h = gray.size
+    histogram = [sum(gray.getpixel((x, y)) < 240 for x in range(w)) for y in range(h)]
+    gaps = [i for i in range(1, h) if histogram[i] < 5 and histogram[i-1] >= 5]
+    bounds = []
     start = 0
     for gap in gaps:
         if gap - start > min_gap_height:
-            chunk_bounds.append((start, gap))
+            bounds.append((start, gap))
             start = gap + 1
-    if start < image.height:
-        chunk_bounds.append((start, image.height))
+    if start < h:
+        bounds.append((start, h))
+    zones = [image.crop((0, t, w, b)).convert("RGB") for t, b in bounds]
+    return zones, bounds
 
-    zones = [image.crop((0, t, image.width, b)).convert("RGB") for t, b in chunk_bounds]
-    return zones, chunk_bounds
-
-# Visual preview of zone boundaries
-def show_zone_overlay(image, bounds, color="red", width=4):
-    preview = image.copy()
-    draw = ImageDraw.Draw(preview)
+# Draw overlay preview of zone bounds
+def show_zone_overlay(image, bounds, color="red", width=3):
+    overlay = image.copy()
+    draw = ImageDraw.Draw(overlay)
     for top, bottom in bounds:
         draw.rectangle([(0, top), (image.width, bottom)], outline=color, width=width)
-    return preview
+    return overlay
 
 # Send image to Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
@@ -78,7 +87,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract fields from form
+# Extract form fields from page
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
     extracted = {}
@@ -149,11 +158,11 @@ def extract_table(doc):
             rows.append(current)
             current = [tok]
     if current: rows.append(current)
-    if len(rows) < 11: return []
+    if len(rows) < 2: return []
 
     headers = [t["text"] for t in sorted(rows[0], key=lambda t: t["x"])]
     table = []
-    for row in rows[1:11]:
+    for row in rows[1:]:
         cells = sorted(row, key=lambda t: t["x"])
         table.append({headers[i]: cells[i]["text"] if i < len(cells) else "" for i in range(len(headers))})
     return table
@@ -181,13 +190,12 @@ def convert_greek_month_dates(doc):
                     dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
     return sorted(set(dates))
 
-# Streamlit UI
+# 🖼️ Streamlit UI
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
-st.title("🏛️ Registry OCR — Interactive Zone Extraction")
+st.title("🏛️ Registry OCR — Form Zone Extraction")
 
-# Sidebar controls
-overlap = st.sidebar.slider("🧩 Overlap between form zones (pixels)", 0, 120, value=60, step=10)
-auto_mode = st.sidebar.checkbox("🔍 Use auto-detected zones", value=False)
+overlap = st.sidebar.slider("🧩 Overlap between form zones (px)", 0, 120, 60, 10)
+auto_mode = st.sidebar.checkbox("🔍 Auto detect zones via whitespace", value=False)
 cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred:
     with open("credentials.json", "wb") as f: f.write(cred.read())
@@ -203,13 +211,12 @@ image = Image.open(file)
 trimmed = trim_whitespace(image)
 img_left = crop_left(trimmed)
 
-if auto_mode:
-    zones, bounds = split_zones_auto(img_left)
-else:
-    zones, bounds = split_zones_fixed(img_left, overlap_px=overlap)
+zones, bounds = (
+    split_zones_auto(img_left) if auto_mode else split_zones_fixed(img_left, overlap_px=overlap)
+)
 
 preview = show_zone_overlay(img_left, bounds)
-st.image(preview, caption="📐 Zone Preview", use_container_width=True)
+st.image(preview, caption="📐 Zone Preview Overlay", use_container_width=True)
 
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
@@ -256,7 +263,7 @@ for i, zone_img in enumerate(zones, start=1):
         st.subheader("📅 Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
 
-# Export section
+# 💾 Export Block
 st.header("💾 Export Data")
 
 flat_fields, flat_tables, flat_dates = [], [], []
