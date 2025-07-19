@@ -13,9 +13,16 @@ def fix_latin_greek(text):
     }
     return "".join(replacements.get(c, c) for c in text)
 
+def fix_cyrillic_greek(text):
+    replacements = {
+        "А": "Α", "В": "Β", "С": "Σ", "Е": "Ε", "Н": "Η",
+        "К": "Κ", "М": "Μ", "О": "Ο", "Р": "Ρ", "Т": "Τ", "Х": "Χ"
+    }
+    return "".join(replacements.get(c, c) for c in text)
+
 def normalize(text):
     if not text: return ""
-    text = fix_latin_greek(text)
+    text = fix_cyrillic_greek(fix_latin_greek(text))
     text = unicodedata.normalize("NFD", text)
     text = ''.join(c for c in text if unicodedata.category(c) != "Mn")
     text = re.sub(r"[^\w\sΑ-ΩάέήίόύώΆΈΉΊΌΎΏ]", "", text)
@@ -84,9 +91,7 @@ def extract_field_from_box_with_vision(pil_img, box, label):
         st.warning(f"⚠️ Could not compute crop for '{label}': {box} — {e}")
         return "", 0.0
 
-    zone_rgb = pil_img.convert("RGB")
-    cropped = zone_rgb.crop((x1, y1, x2, y2)).copy()
-
+    cropped = pil_img.convert("RGB").crop((x1, y1, x2, y2)).copy()
     buf = BytesIO()
     try:
         cropped.save(buf, format="JPEG")
@@ -97,7 +102,9 @@ def extract_field_from_box_with_vision(pil_img, box, label):
     buf.seek(0)
     client = vision.ImageAnnotatorClient()
     image = vision.Image(content=buf.read())
-    response = client.text_detection(image=image)
+    image_context = {"language_hints": ["el"]}
+
+    response = client.text_detection(image=image, image_context=image_context)
 
     if response.error.message:
         st.warning(f"🛑 Vision API Error for '{label}': {response.error.message}")
@@ -105,52 +112,7 @@ def extract_field_from_box_with_vision(pil_img, box, label):
 
     desc = response.text_annotations[0].description.strip() if response.text_annotations else ""
     return desc, estimate_confidence(label, desc)
-# App layout & sidebar controls
-st.set_page_config(layout="wide", page_title="Registry Parser")
-st.title("📜 Greek Registry Parser — AI + Manual Fallbacks")
-
-overlap = st.sidebar.slider("🔁 Zone Overlap", 0, 120, 50)
-cred_file = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
-if cred_file:
-    with open("credentials.json", "wb") as f: f.write(cred_file.read())
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
-    st.sidebar.success("✅ Credentials loaded")
-
-uploaded_box_map = st.sidebar.file_uploader("📥 Import Fallback Box Map", type=["json"])
-manual_boxes_per_form = {}
-if uploaded_box_map:
-    try:
-        manual_boxes_per_form = json.load(uploaded_box_map)
-        st.sidebar.success(f"✅ Loaded box map for {len(manual_boxes_per_form)} form(s)")
-        if "1" in manual_boxes_per_form:
-            for z in range(2, 4):  # assuming 3 zones
-                form_id = str(z)
-                if not manual_boxes_per_form.get(form_id):
-                    manual_boxes_per_form[form_id] = manual_boxes_per_form["1"]
-            st.sidebar.info("📐 Applied Form 1 layout to missing forms")
-    except Exception as e:
-        st.sidebar.error(f"📛 Failed to load box map: {e}")
-
-normalize_input = st.checkbox("📏 Normalize pixel box map automatically", value=True)
-
-uploaded_image = st.file_uploader("🖼️ Upload Registry Image", type=["jpg", "jpeg", "png"])
-if not uploaded_image:
-    st.info("ℹ️ Please upload a registry image to continue.")
-    st.stop()
-
-original = Image.open(uploaded_image)
-cropped = crop_left(trim_whitespace(original))
-zones, bounds = split_zones_fixed(cropped, overlap)
-st.image(cropped, caption="🖼️ Trimmed Registry (Left Side)", use_container_width=True)
-
-project_id = "heroic-gantry-380919"
-processor_id = "8f7f56e900fbb37e"
-location = "eu"
-target_labels = [
-    "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"
-]
-
-forms_parsed = []
+# ... setup code for layout, credentials, box loading ...
 
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
@@ -232,7 +194,7 @@ for idx, zone in enumerate(zones, start=1):
             conf = round(f.field_value.confidence * 100, 2)
             for t in target_labels:
                 if normalize(label) == normalize(t):
-                    corrected = normalize(fix_latin_greek(value))
+                    corrected = normalize(fix_cyrillic_greek(fix_latin_greek(value)))
                     extracted[t] = {
                         "Raw": value.strip(),
                         "Corrected": corrected,
@@ -251,7 +213,7 @@ for idx, zone in enumerate(zones, start=1):
         else:
             box = manual_boxes_per_form[str(idx)].get(label)
             fallback_text, confidence = extract_field_from_box_with_vision(zone, box, label) if box else ("", 0.0)
-            corrected = normalize(fix_latin_greek(fallback_text))
+            corrected = normalize(fix_cyrillic_greek(fix_latin_greek(fallback_text)))
             fields.append({
                 "Label": label,
                 "Raw": fallback_text,
