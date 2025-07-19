@@ -12,7 +12,7 @@ def normalize(text):
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Crop left side of image
+# Crop to left side of image
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
@@ -23,7 +23,7 @@ def split_zones(image):
     bounds = [(0.00, 0.32), (0.33, 0.65), (0.66, 1.00)]
     return [image.crop((0, int(h*t), w, int(h*b))).convert("RGB") for t, b in bounds]
 
-# Document AI parser
+# Send image to Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -40,7 +40,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Field extraction with label merging, missing fill, and confidence
+# Extract fields with label merging and confidence
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
 
@@ -67,7 +67,12 @@ def extract_fields(doc, target_labels):
             merged_label += " " + collected[j]["Label"]
             merged_value += " " + collected[j]["Value"]
             merged_conf = round((merged_conf + collected[j]["Confidence"]) / 2, 2)
-            if any(normalize(merged_label).startswith(normalize(t)) or normalize(t) in normalize(merged_label) for t in target_labels):
+
+            # ✅ Only merge if there's actual value content
+            if merged_value.strip() and any(
+                normalize(merged_label).startswith(normalize(t)) or normalize(t) in normalize(merged_label)
+                for t in target_labels
+            ):
                 extracted[merged_label.strip()] = {
                     "Raw": merged_value.strip(), "Corrected": normalize(merged_value),
                     "Confidence": merged_conf, "Schema": normalize(merged_label)
@@ -96,8 +101,8 @@ def extract_table(doc):
         for token in page.tokens:
             txt = token.layout.text_anchor.content or ""
             box = token.layout.bounding_poly.normalized_vertices
-            y = sum(v.y for v in box)/len(box)
-            x = sum(v.x for v in box)/len(box)
+            y = sum(v.y for v in box) / len(box)
+            x = sum(v.x for v in box) / len(box)
             tokens.append({"text": normalize(txt), "y": y, "x": x})
     if not tokens: return []
 
@@ -142,7 +147,7 @@ def convert_greek_month_dates(doc):
                     dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
     return sorted(set(dates))
 
-# Streamlit App
+# 🖼️ Streamlit App UI
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
 st.title("🏛️ Registry OCR — Validated Extraction")
 
@@ -155,7 +160,7 @@ if cred:
 
 file = st.file_uploader("📎 Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not file:
-    st.info("ℹ️ Please upload an image to begin")
+    st.info("ℹ️ Upload an image to begin")
     st.stop()
 
 img_left = crop_left(Image.open(file))
@@ -200,7 +205,7 @@ for i, zone_img in enumerate(zones, start=1):
         st.subheader("📅 Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
 
-# Final Export
+# 📦 Export Block
 st.header("💾 Export Data")
 
 flat_fields, flat_tables, flat_dates = [], [], []
@@ -217,8 +222,8 @@ for form in parsed_forms:
             {"Form": form["Form"], "Standardized Date": date} for date in form["Dates"]
         ])
 
-fields_df = pd.DataFrame(flat_fields)
-st.download_button("📄 Download Forms CSV", fields_df.to_csv(index=False), "forms.csv", "text/csv")
+forms_df = pd.DataFrame(flat_fields)
+st.download_button("📄 Download Forms CSV", forms_df.to_csv(index=False), "forms.csv", "text/csv")
 st.download_button("📄 Download Forms JSON", json.dumps(flat_fields, indent=2, ensure_ascii=False), "forms.json", "application/json")
 
 if flat_tables:
