@@ -72,7 +72,7 @@ def extract_field_from_box_with_vision(pil_img, box):
 st.set_page_config(layout="wide", page_title="Registry Parser")
 st.title("📜 Greek Registry Parser — AI + Manual Fallbacks")
 
-overlap = st.sidebar.slider("🔁 Zone Overlap", 0, 120, 60)
+overlap = st.sidebar.slider("🔁 Zone Overlap", 0, 120, 50)
 cred_file = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f: f.write(cred_file.read())
