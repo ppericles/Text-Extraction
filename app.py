@@ -55,7 +55,7 @@ def estimate_confidence(label, text):
     elif label in ["ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"]:
         is_greekish = re.match(r"^[Α-ΩΆΈΉΊΌΎΏα-ωάέήίόύώ\s\-]{3,}$", text)
         return 75.0 if is_greekish else 30.0
-    return 50.0  # Fallback
+    return 50.0
 
 def extract_field_from_box_with_vision(pil_img, box, label):
     try:
@@ -67,13 +67,18 @@ def extract_field_from_box_with_vision(pil_img, box, label):
     w, h = pil_img.size
     x1, y1 = int(x * w), int(y * h)
     x2, y2 = int((x + bw) * w), int((y + bh) * h)
-    cropped = pil_img.crop((x1, y1, x2, y2)).convert("RGB")  # ✅ RGB fix
+
+    # ✅ Safe conversion before cropping to avoid JPEG errors
+    cropped = pil_img.convert("RGB").crop((x1, y1, x2, y2))
+
     buf = BytesIO()
     cropped.save(buf, format="JPEG")
     buf.seek(0)
+
     client = vision.ImageAnnotatorClient()
     image = vision.Image(content=buf.read())
     response = client.text_detection(image=image)
+
     if response.error.message:
         st.warning(f"🛑 Vision API Error: {response.error.message}")
         return "", 0.0
@@ -114,7 +119,7 @@ cropped = crop_left(trim_whitespace(original))
 zones, bounds = split_zones_fixed(cropped, overlap)
 st.image(cropped, caption="🖼️ Trimmed Registry (Left Side)", use_container_width=True)
 
-# AI config
+# AI configuration
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
@@ -129,7 +134,7 @@ for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     zone_width, zone_height = zone.size
 
-    # Prefill fallback box table
+    # Prefill fallback table
     existing = manual_boxes_per_form.get(str(idx), {})
     prefill_rows = []
     for label in target_labels:
@@ -154,6 +159,7 @@ for idx, zone in enumerate(zones, start=1):
         key=f"editor_{idx}"
     )
 
+    # Capture table input
     manual_boxes_per_form[str(idx)] = {}
     for _, row in box_editor.iterrows():
         label = row["Label"]
@@ -184,7 +190,7 @@ for idx, zone in enumerate(zones, start=1):
                 continue
         st.image(overlay, caption="🟣 Defined Fallback Boxes", use_container_width=True)
 
-    # 🔍 Parse with Document AI
+    # 🔍 Document AI parsing
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     if not doc: continue
 
@@ -202,7 +208,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # 🩹 Merge AI results with fallback recovery
+    # 🩹 Merge results with Vision fallback
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"]:
@@ -279,15 +285,14 @@ if invalid_forms:
 st.header("📈 Confidence Overview")
 
 avg_conf = round(df["Confidence"].mean(), 2)
-low_conf_fields = df[df["Confidence"] < 50.0]
-
 st.markdown(f"📌 Average confidence across all fields: **{avg_conf}%**")
 
+low_conf_fields = df[df["Confidence"] < 50.0]
 if not low_conf_fields.empty:
-    st.subheader("🔍 Low Confidence Fields (< 50%)")
+    st.subheader("🔍 Fields with Low Confidence (< 50%)")
     st.dataframe(low_conf_fields, use_container_width=True)
 
-# 💾 Export Fallback Box Layouts
+# 💾 Fallback Box Layout Export
 if manual_boxes_per_form:
     st.header("📦 Fallback Box Layout Map")
     st.json(manual_boxes_per_form)
