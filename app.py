@@ -68,7 +68,6 @@ def extract_field_from_box_with_vision(pil_img, box, label):
     x1, y1 = int(x * w), int(y * h)
     x2, y2 = int((x + bw) * w), int((y + bh) * h)
 
-    # ✅ Ensure JPEG-compatible image by converting then copying
     zone_rgb = pil_img.convert("RGB")
     cropped = zone_rgb.crop((x1, y1, x2, y2)).copy()
 
@@ -135,7 +134,7 @@ for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     zone_width, zone_height = zone.size
 
-    # Prefill fallback box editor with auto-detection
+    # Prefill fallback box editor
     existing = manual_boxes_per_form.get(str(idx), {})
     prefill_rows = []
     for label in target_labels:
@@ -153,7 +152,7 @@ for idx, zone in enumerate(zones, start=1):
                 x, y, w, h = x_raw, y_raw, w_raw, h_raw
 
             if any(val <= 0 or val > 1 for val in (w, h)):
-                raise ValueError("Box too small or oversized")
+                raise ValueError("Box dimensions out of bounds")
         except Exception:
             x, y, w, h = None, None, None, None
 
@@ -166,7 +165,7 @@ for idx, zone in enumerate(zones, start=1):
         key=f"editor_{idx}"
     )
 
-    # Store updated fallback boxes
+    # Capture edited boxes
     manual_boxes_per_form[str(idx)] = {}
     for _, row in box_editor.iterrows():
         label = row["Label"]
@@ -174,31 +173,32 @@ for idx, zone in enumerate(zones, start=1):
         if all(val is not None for val in (x, y, w, h)):
             manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
 
-    # 🟣 Overlay fallback boxes
-    if manual_boxes_per_form[str(idx)]:
-        overlay = zone.copy()
-        draw = ImageDraw.Draw(overlay)
-        w, h = overlay.size
+    # 🟣 Overlay fallback boxes (always attempt)
+    overlay = zone.copy()
+    draw = ImageDraw.Draw(overlay)
+    w, h = overlay.size
+    try:
+        font = ImageFont.truetype("arial.ttf", size=14)
+    except:
+        font = None
+
+    for label, box in manual_boxes_per_form.get(str(idx), {}).items():
         try:
-            font = ImageFont.truetype("arial.ttf", size=14)
-        except:
-            font = None
+            x, y, bw, bh = box
+            if None in (x, y, bw, bh): raise ValueError()
+            x1, y1 = int(x * w), int(y * h)
+            x2, y2 = int((x + bw) * w), int((y + bh) * h)
+            draw.rectangle([(x1, y1), (x2, y2)], outline="purple", width=2)
+            draw.text((x1, y1 - 16), label, fill="purple", font=font or None)
+        except Exception:
+            st.warning(f"⚠️ Skipping '{label}' — invalid box: {box}")
+    st.image(overlay, caption=f"🟣 Fallback Boxes for Form {idx}", use_container_width=True)
 
-        for label, box in manual_boxes_per_form[str(idx)].items():
-            try:
-                x, y, bw, bh = box
-                if None in (x, y, bw, bh): raise ValueError()
-                x1, y1 = int(x * w), int(y * h)
-                x2, y2 = int((x + bw) * w), int((y + bh) * h)
-                draw.rectangle([(x1, y1), (x2, y2)], outline="purple", width=2)
-                draw.text((x1, y1 - 16), label, fill="purple", font=font or None)
-            except Exception:
-                st.warning(f"⚠️ Skipping '{label}' — invalid box: {box}")
-        st.image(overlay, caption="🟣 Defined Fallback Boxes", use_container_width=True)
-
-    # Document AI parsing
+    # 🔍 Document AI parse
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
-    if not doc: continue
+    if not doc:
+        st.error(f"❌ Document AI returned no result for Form {idx}")
+        continue
 
     extracted = {}
     for page in doc.pages:
@@ -214,7 +214,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # Merge AI and fallback results
+    # 🩹 Merge AI & Vision fallback
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"]:
