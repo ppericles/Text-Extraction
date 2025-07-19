@@ -6,18 +6,15 @@ import re
 from io import BytesIO
 from google.cloud import documentai_v1 as documentai
 
-# 🔠 Normalize Greek text (accent-free uppercase)
 def normalize(text):
     if not text: return ""
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# ✂️ Crop to left half
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# 📐 Tuned vertical slicing (3 calibrated zones)
 def split_zones_tuned(image):
     w, h = image.size
     boundaries = [(0.00, 0.32), (0.33, 0.65), (0.66, 1.00)]
@@ -28,7 +25,6 @@ def split_zones_tuned(image):
         zones.append(image.crop((0, top, w, bottom)).convert("RGB"))
     return zones
 
-# 🔍 Send image to Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -45,7 +41,6 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# 📋 Extract only desired form fields
 def extract_fields(doc, target_labels):
     fields = []
     if not doc or not doc.pages: return fields
@@ -64,7 +59,6 @@ def extract_fields(doc, target_labels):
                 })
     return fields
 
-# 📊 Reconstruct table from token geometry
 def extract_table(doc):
     tokens = []
     for page in doc.pages:
@@ -95,20 +89,13 @@ def extract_table(doc):
         table.append({headers[i]: cells[i]["text"] if i < len(cells) else "" for i in range(len(headers))})
     return table
 
-# 📅 Greek month mapping
 MONTH_MAP_GR = {
-    "ΙΑΝΟΥΑΡΙΟΥ": "01", "ΙΑΝ": "01",
-    "ΦΕΒΡΟΥΑΡΙΟΥ": "02", "ΦΕΒ": "02",
-    "ΜΑΡΤΙΟΥ": "03", "ΜΑΡ": "03",
-    "ΑΠΡΙΛΙΟΥ": "04", "ΑΠΡ": "04",
-    "ΜΑΪΟΥ": "05", "ΜΑΪ": "05",
-    "ΙΟΥΝΙΟΥ": "06", "ΙΟΥΝ": "06",
-    "ΙΟΥΛΙΟΥ": "07", "ΙΟΥΛ": "07",
-    "ΑΥΓΟΥΣΤΟΥ": "08", "ΑΥΓ": "08",
-    "ΣΕΠΤΕΜΒΡΙΟΥ": "09", "ΣΕΠ": "09",
-    "ΟΚΤΩΒΡΙΟΥ": "10", "ΟΚΤ": "10",
-    "ΝΟΕΜΒΡΙΟΥ": "11", "ΝΟΕ": "11",
-    "ΔΕΚΕΜΒΡΙΟΥ": "12", "ΔΕΚ": "12"
+    "ΙΑΝΟΥΑΡΙΟΥ": "01", "ΙΑΝ": "01", "ΦΕΒΡΟΥΑΡΙΟΥ": "02", "ΦΕΒ": "02",
+    "ΜΑΡΤΙΟΥ": "03", "ΜΑΡ": "03", "ΑΠΡΙΛΙΟΥ": "04", "ΑΠΡ": "04",
+    "ΜΑΪΟΥ": "05", "ΜΑΪ": "05", "ΙΟΥΝΙΟΥ": "06", "ΙΟΥΝ": "06",
+    "ΙΟΥΛΙΟΥ": "07", "ΙΟΥΛ": "07", "ΑΥΓΟΥΣΤΟΥ": "08", "ΑΥΓ": "08",
+    "ΣΕΠΤΕΜΒΡΙΟΥ": "09", "ΣΕΠ": "09", "ΟΚΤΩΒΡΙΟΥ": "10", "ΟΚΤ": "10",
+    "ΝΟΕΜΒΡΙΟΥ": "11", "ΝΟΕ": "11", "ΔΕΚΕΜΒΡΙΟΥ": "12", "ΔΕΚ": "12"
 }
 
 def convert_greek_month_dates(doc):
@@ -126,8 +113,8 @@ def convert_greek_month_dates(doc):
     return sorted(set(dates))
 
 # 🖼️ Streamlit UI
-st.set_page_config(layout="wide", page_title="Registry OCR Parser")
-st.title("🏛️ Greek Registry Parser — Specific Field & Table Extraction")
+st.set_page_config(layout="wide", page_title="Greek Registry Parser")
+st.title("🏛️ Greek Registry OCR — Targeted Field + Table + Date")
 
 cred = st.sidebar.file_uploader("🔐 GCP Credentials (.json)", type=["json"])
 if cred:
@@ -135,7 +122,7 @@ if cred:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
-file = st.file_uploader("📎 Upload Registry Scan", type=["jpg", "jpeg", "png"])
+file = st.file_uploader("📎 Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not file: st.stop()
 
 img = Image.open(file)
@@ -145,7 +132,7 @@ zones = split_zones_tuned(img_left)
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
-target_labels = ["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ"]
+target_labels = ["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"]
 
 all_fields, all_tables, all_dates = [], [], []
 
@@ -161,7 +148,7 @@ for i, zone_img in enumerate(zones, start=1):
 
     if fields:
         all_fields.extend(fields)
-        st.subheader("📋 Specific Form Fields")
+        st.subheader("📋 Targeted Form Fields")
         st.dataframe(pd.DataFrame(fields), use_container_width=True)
     else:
         st.warning("⚠️ Targeted fields not found.")
@@ -179,6 +166,9 @@ for i, zone_img in enumerate(zones, start=1):
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
     else:
         st.info("ℹ️ No Greek-style dates found.")
+
+# 💾 Export Section
+st.header("💾 Export Data")
 
 forms_df = pd.DataFrame(all_fields)
 st.download_button("📄 Download Forms CSV", forms_df.to_csv(index=False), "forms.csv", "text/csv")
