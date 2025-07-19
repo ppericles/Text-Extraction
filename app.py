@@ -36,30 +36,31 @@ def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# 🧼 Preprocess Image
+# 🧼 Optional Preprocess (can skip during testing)
 def preprocess(image):
-    if image.width > 1500:
-        image = image.resize((1500, int(image.height * 1500 / image.width)))
-    gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
-    blur = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return Image.fromarray(binary)
+    return image  # Bypass preprocessing for diagnosis
 
-# 🔍 Document AI Parsing
+# 🧠 Document AI Parsing with Error Diagnostics
 def parse_docai(pil_img, project_id, processor_id, location):
-    client = documentai.DocumentProcessorServiceClient(
-        client_options={"api_endpoint": f"{location}-documentai.googleapis.com"}
-    )
-    name = client.processor_path(project_id, location, processor_id)
-    buf = BytesIO()
-    pil_img.save(buf, format="JPEG")
-    raw = documentai.RawDocument(content=buf.read(), mime_type="image/jpeg")
-    request = documentai.ProcessRequest(name=name, raw_document=raw)
-    return client.process_document(request=request).document
+    try:
+        client = documentai.DocumentProcessorServiceClient(
+            client_options={"api_endpoint": f"{location}-documentai.googleapis.com"}
+        )
+        name = client.processor_path(project_id, location, processor_id)
+        buf = BytesIO()
+        pil_img.save(buf, format="JPEG")
+        raw = documentai.RawDocument(content=buf.read(), mime_type="image/jpeg")
+        request = documentai.ProcessRequest(name=name, raw_document=raw)
+        result = client.process_document(request=request)
+        return result.document
+    except Exception as e:
+        st.error(f"📛 Document AI Error: {e}")
+        return None
 
-# 🧠 Extract Form Fields
+# 🧬 Extract Form Fields
 def extract_forms(doc):
     zones = {1: [], 2: [], 3: []}
+    if not doc or not doc.pages: return zones
     for page in doc.pages:
         for field in page.form_fields:
             label = field.field_name.text_anchor.content or ""
@@ -77,9 +78,10 @@ def extract_forms(doc):
             })
     return zones
 
-# 📋 Manual Table Builder Using Header Matching
+# 📋 Header-Based Table Extraction
 def extract_table_by_headers(doc, target_headers):
     lines = []
+    if not doc or not doc.pages: return []
     for page in doc.pages:
         for para in page.paragraphs:
             line = para.layout.text_anchor.content or ""
@@ -113,10 +115,9 @@ def extract_table_by_headers(doc, target_headers):
     return rows
 
 # 🖼️ Streamlit App
-st.set_page_config(layout="wide", page_title="Registry OCR — Form + Header-Matched Table")
-st.title("🏛️ Registry OCR — Forms + Custom Header Table Builder")
+st.set_page_config(layout="wide", page_title="Registry OCR — Diagnostic Mode")
+st.title("🏛️ Registry OCR — Forms + Table with Error Detection")
 
-# 🔐 Credentials + Upload
 cred = st.sidebar.file_uploader("🔐 GCP Credentials (.json)", type=["json"])
 if cred:
     with open("credentials.json", "wb") as f:
@@ -124,31 +125,31 @@ if cred:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
-file = st.file_uploader("📎 Upload Registry Scan", type=["jpg", "jpeg", "png"])
+file = st.file_uploader("📎 Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not file: st.stop()
 
-headers_input = st.sidebar.text_input("📋 Table Headers (comma-separated in Greek)", value="ΗΜΕΡΟΜΗΝΙΑ,ΕΝΕΡΓΕΙΑ,ΣΧΟΛΙΑ")
+headers_input = st.sidebar.text_input("📋 Table Headers (comma-separated)", value="ΗΜΕΡΟΜΗΝΙΑ,ΕΝΕΡΓΕΙΑ,ΣΧΟΛΙΑ")
 target_headers = [normalize(h.strip()) for h in headers_input.split(",") if h.strip()]
 
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
 
-# 🧼 Image Prep
 img = Image.open(file)
 left = crop_left(img)
 proc = preprocess(left)
 
-st.image(img, caption="📜 Full Original Image", use_column_width=True)
-st.image(proc, caption="🧼 Preprocessed Left Half", use_column_width=True)
+st.image(img, caption="📜 Original Image", use_column_width=True)
+st.image(proc, caption="🧼 Preprocessed Left Half (Raw)", use_column_width=True)
 
-with st.spinner("🔍 Parsing image..."):
-    doc = parse_docai(proc.copy(), project_id, processor_id, location)
-    forms = extract_forms(doc)
-    table = extract_table_by_headers(doc, target_headers)
+doc = parse_docai(proc.copy(), project_id, processor_id, location)
+if not doc:
+    st.stop()
 
-# 📄 Display Forms
-st.subheader("📋 Parsed Form Fields")
+forms = extract_forms(doc)
+table = extract_table_by_headers(doc, target_headers)
+
+st.subheader("📋 Form Fields")
 form_stats, all_fields = [], []
 
 for zone in [1, 2, 3]:
@@ -169,15 +170,13 @@ for zone in [1, 2, 3]:
 st.subheader("📊 Form Summary")
 st.dataframe(pd.DataFrame(form_stats, columns=["Form", "Fields", "Avg Confidence"]), use_container_width=True)
 
-# 📋 Table Preview
-st.subheader("🧾 Extracted Table Based on Headers")
+st.subheader("🧾 Table Recovery")
 if table:
     st.dataframe(pd.DataFrame(table), use_container_width=True)
 else:
-    st.warning("⚠️ Table headers not found — try adjusting header input or checking OCR quality.")
+    st.warning("⚠️ Table headers not found or no matching lines. Check input or OCR quality.")
 
-# 💾 Export
-st.subheader("💾 Export Data")
+st.subheader("💾 Export")
 form_df = pd.DataFrame(all_fields)
 st.download_button("📄 Download Forms CSV", form_df.to_csv(index=False), "forms.csv", "text/csv")
 st.download_button("📄 Download Forms JSON", json.dumps(all_fields, indent=2, ensure_ascii=False), "forms.json", "application/json")
