@@ -12,16 +12,28 @@ def normalize(text):
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Crop image to left side
+# Crop image to left half
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Slice image into vertical zones
-def split_zones(image):
+# Smart zone splitting with buffer overlap
+def split_zones(image, overlap=50):
     w, h = image.size
-    bounds = [(0.00, 0.32), (0.33, 0.65), (0.66, 1.00)]
-    return [image.crop((0, int(h*t), w, int(h*b))).convert("RGB") for t, b in bounds]
+    one_third = h // 3
+
+    boundaries = [
+        (0, one_third + overlap),
+        (one_third - overlap, 2 * one_third + overlap),
+        (2 * one_third - overlap, h)
+    ]
+
+    zones = []
+    for top, bottom in boundaries:
+        top = max(0, top)
+        bottom = min(h, bottom)
+        zones.append(image.crop((0, top, w, bottom)).convert("RGB"))
+    return zones
 
 # Send image to Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
@@ -40,7 +52,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract fields with smart label matching and confidence
+# Extract fields with smart label merging
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
 
@@ -97,8 +109,8 @@ def extract_table(doc):
         for token in page.tokens:
             txt = token.layout.text_anchor.content or ""
             box = token.layout.bounding_poly.normalized_vertices
-            y = sum(v.y for v in box)/len(box)
-            x = sum(v.x for v in box)/len(box)
+            y = sum(v.y for v in box) / len(box)
+            x = sum(v.x for v in box) / len(box)
             tokens.append({"text": normalize(txt), "y": y, "x": x})
     if not tokens: return []
 
@@ -143,7 +155,7 @@ def convert_greek_month_dates(doc):
                     dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
     return sorted(set(dates))
 
-# Streamlit App
+# Streamlit UI
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
 st.title("🏛️ Registry OCR — Validated Extraction")
 
@@ -160,7 +172,7 @@ if not file:
     st.stop()
 
 img_left = crop_left(Image.open(file))
-zones = split_zones(img_left)
+zones = split_zones(img_left, overlap=50)
 
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
@@ -186,7 +198,8 @@ for i, zone_img in enumerate(zones, start=1):
     parsed_forms.append({
         "Form": i, "Valid": valid,
         "Missing": missing, "Fields": fields,
-        "Table": table, "Dates": dates
+        "Table": table,
+        "Dates": dates
     })
 
     st.subheader("📋 Form Fields")
@@ -201,7 +214,7 @@ for i, zone_img in enumerate(zones, start=1):
         st.subheader("📅 Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
 
-# Final export
+# Final Export Section
 st.header("💾 Export Data")
 
 flat_fields, flat_tables, flat_dates = [], [], []
