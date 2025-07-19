@@ -102,31 +102,43 @@ def extract_field_from_box_with_vision(pil_img, box, label):
         y1 = int(y * h)
         x2 = int((x + bw) * w)
         y2 = int((y + bh) * h)
+        if x1 >= x2 or y1 >= y2:
+            raise ValueError("Invalid crop coordinates")
+        cropped = pil_img.convert("RGB").crop((x1, y1, x2, y2))
+        if cropped.size == (0, 0):
+            raise ValueError("Empty crop region")
     except Exception as e:
-        st.warning(f"⚠️ Box error for '{label}': {e}")
+        st.warning(f"⚠️ Skipping field '{label}' due to crop error: {e}")
         return "", 0.0
 
-    cropped = pil_img.convert("RGB").crop((x1, y1, x2, y2)).copy()
     buf = BytesIO()
-    cropped.save(buf, format="JPEG")
-    buf.seek(0)
+    try:
+        cropped.convert("RGB").save(buf, format="JPEG")
+    except Exception as e:
+        st.warning(f"🛑 Could not save crop for '{label}': {e}")
+        return "", 0.0
 
+    buf.seek(0)
     client = vision.ImageAnnotatorClient()
     image = vision.Image(content=buf.read())
     image_context = {"language_hints": ["el"]}
 
-    response = client.text_detection(image=image, image_context=image_context)
-    if response.error.message:
-        st.warning(f"🛑 Vision API Error for '{label}': {response.error.message}")
+    try:
+        response = client.text_detection(image=image, image_context=image_context)
+        if response.error.message:
+            st.warning(f"🛑 Vision API Error for '{label}': {response.error.message}")
+            return "", 0.0
+        desc = response.text_annotations[0].description.strip() if response.text_annotations else ""
+    except Exception as e:
+        st.warning(f"🛑 Vision API request failed for '{label}': {e}")
         return "", 0.0
 
-    desc = response.text_annotations[0].description.strip() if response.text_annotations else ""
     return desc, estimate_confidence(label, desc)
-# 📦 App layout and config
+# 📦 App config and layout
 st.set_page_config(layout="wide", page_title="📜 Greek Registry Parser")
 st.title("📜 Greek Registry Parser — AI + OCR Fallbacks")
 
-# 🔧 Sidebar controls
+# 🔧 Sidebar setup
 overlap = st.sidebar.slider("🔁 Zone Overlap", 0, 120, 50)
 cred_file = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred_file:
@@ -140,16 +152,16 @@ manual_boxes_per_form = {}
 if uploaded_box_map:
     try:
         manual_boxes_per_form = json.load(uploaded_box_map)
-        st.sidebar.success(f"✅ Loaded box map for {len(manual_boxes_per_form)} form(s)")
+        st.sidebar.success(f"✅ Loaded fallback layout for {len(manual_boxes_per_form)} form(s)")
     except Exception as e:
         st.sidebar.error(f"❌ Failed to load box map: {e}")
 
-normalize_input = st.sidebar.checkbox("📏 Normalize bounding boxes", value=True)
+normalize_input = st.sidebar.checkbox("📏 Normalize box dimensions", value=True)
 
 # 🖼️ Upload registry image
 uploaded_image = st.file_uploader("🖼️ Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not uploaded_image:
-    st.info("ℹ️ Please upload a registry image to continue.")
+    st.info("ℹ️ Please upload a registry image to begin.")
     st.stop()
 
 try:
@@ -168,10 +180,10 @@ except Exception as e:
 
 # 🖼️ Preview cropped image and zones
 st.image(cropped, caption="🖼️ Cropped Registry (Left Side)", use_container_width=True)
-st.header("🖼️ Zone Previews")
+st.header("🖼️ Registry Zones Preview")
 for idx, zone in enumerate(zones, start=1):
     st.image(zone, caption=f"Zone {idx}", width=300)
-# 🧠 Parser configuration
+# 🧠 Parser setup
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
@@ -182,26 +194,20 @@ for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     zone_width, zone_height = zone.size
 
-    # 📝 Edit fallback boxes
+    # 📝 Fallback box editor
     existing = manual_boxes_per_form.get(str(idx), {})
-    prefill_rows = []
+    rows = []
     for label in target_labels:
         box = existing.get(label, (None, None, None, None))
         try:
             x_raw, y_raw, w_raw, h_raw = [float(v) for v in box]
-            if normalize_input:
-                x = x_raw / zone_width
-                y = y_raw / zone_height
-                w = w_raw / zone_width
-                h = h_raw / zone_height
-            else:
-                x, y, w, h = x_raw, y_raw, w_raw, h_raw
+            x, y, w, h = (x_raw / zone_width, y_raw / zone_height, w_raw / zone_width, h_raw / zone_height) if normalize_input else (x_raw, y_raw, w_raw, h_raw)
         except:
             x, y, w, h = None, None, None, None
-        prefill_rows.append({"Label": label, "X": x, "Y": y, "Width": w, "Height": h})
+        rows.append({"Label": label, "X": x, "Y": y, "Width": w, "Height": h})
 
     box_editor = st.data_editor(
-        pd.DataFrame(prefill_rows),
+        pd.DataFrame(rows),
         use_container_width=True,
         num_rows="dynamic",
         key=f"editor_{idx}"
@@ -213,16 +219,15 @@ for idx, zone in enumerate(zones, start=1):
         if all(val is not None for val in (row["X"], row["Y"], row["Width"], row["Height"]))
     }
 
-    # ➕ Propagate layout from Form 1 if missing
+    # ↔️ Propagate Form 1 layout
     if idx == 1:
         layout_1 = manual_boxes_per_form["1"]
         for z in range(2, len(zones) + 1):
-            fid = str(z)
-            if not manual_boxes_per_form.get(fid):
-                manual_boxes_per_form[fid] = layout_1
-        st.info("📐 Applied Form 1 layout to forms missing box definitions")
+            if not manual_boxes_per_form.get(str(z)):
+                manual_boxes_per_form[str(z)] = layout_1
+        st.info("📐 Applied Form 1 layout to other forms")
 
-    # 🖍️ Draw box overlays
+    # 🎨 Overlay fallback boxes
     overlay = zone.copy()
     draw = ImageDraw.Draw(overlay)
     font = ImageFont.truetype("arial.ttf", size=14) if os.path.exists("arial.ttf") else None
@@ -240,7 +245,7 @@ for idx, zone in enumerate(zones, start=1):
             continue
     st.image(overlay, caption=f"🟣 Annotated Boxes — Form {idx}", use_container_width=True)
 
-    # 🔍 Document AI parsing
+    # 📄 Parse with Document AI
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     extracted = {}
     if doc:
@@ -264,7 +269,7 @@ for idx, zone in enumerate(zones, start=1):
                             "Thumb": None
                         }
 
-    # 🩹 Vision OCR fallback + thumbnail
+    # 🩹 Fallback parsing with Vision + thumbnail
     fields = []
     for label in target_labels:
         f = extracted.get(label)
@@ -278,7 +283,7 @@ for idx, zone in enumerate(zones, start=1):
         issues = validate_registry_field(label, corrected, confidence)
         suggestion = suggest_fix(label, corrected, issues)
 
-        # ✂️ Create thumbnail from crop
+        # ✂️ Extract thumbnail
         thumb = None
         try:
             x, y, bw, bh = [float(v) for v in box]
@@ -301,129 +306,133 @@ for idx, zone in enumerate(zones, start=1):
             "Thumb": thumb
         })
 
-    # 🧾 Display parsed fields
-    st.subheader("🧾 Parsed Field Table")
-    df_fields = pd.DataFrame([{k: v for k, v in f.items() if k != "Thumb"} for f in fields])
-    st.dataframe(df_fields, use_container_width=True)
-
-    # 🖼️ Show flagged thumbnails
-    flagged = [f for f in fields if f.get("Thumb") and f["Issues"]]
-    if flagged:
-        st.subheader("🖼️ Thumbnails of Flagged Fields")
-        for f in flagged:
-            st.image(f["Thumb"], caption=f"{f['Label']} → {', '.join(f['Issues'])}", width=200)
-
     forms_parsed.append({
         "Form": idx,
         "Fields": fields,
         "Missing": [f["Label"] for f in fields if not f["Raw"].strip()]
     })
 
-# ✅ Done parsing
+# 🟢 Proceed to review/export dashboard
 st.success("✅ All registry zones parsed successfully")
-# 📤 Export Corrected Field Data
-st.header("📤 Export Parsed Field Data")
+# 📊 Registry Review & Export Dashboard
+st.header("📊 Registry Review and Export Dashboard")
 
 flat_fields = []
-for form in forms_parsed:
-    for field in form["Fields"]:
-        flat_fields.append({
-            "Form": form["Form"],
-            "Label": field["Label"],
-            "Raw": field["Raw"],
-            "Corrected": field["Corrected"],
-            "Confidence": field["Confidence"],
-            "Issues": field.get("Issues", []),
-            "Suggestion": field.get("Suggestion"),
-            "Thumb": "Included" if field.get("Thumb") else "None"
-        })
 
-df = pd.DataFrame(flat_fields)
+for form in forms_parsed:
+    form_id = form["Form"]
+    fields = form["Fields"]
+
+    st.subheader(f"📄 Form {form_id}")
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        st.markdown("📝 Parsed Field Details")
+        df_parsed = pd.DataFrame([
+            {
+                "Label": f["Label"],
+                "Raw": f["Raw"],
+                "Corrected": f["Corrected"],
+                "Confidence": f["Confidence"],
+                "Issues": ", ".join(f.get("Issues", []))
+            } for f in fields
+        ])
+        st.dataframe(df_parsed, use_container_width=True)
+
+    with col2:
+        st.markdown("💡 Finalize & Apply Corrections")
+        for f in fields:
+            label = f["Label"]
+            suggestion = f.get("Suggestion")
+            corrected = f["Corrected"]
+            confidence = f["Confidence"]
+            default_final = suggestion if suggestion else corrected
+
+            f["Final"] = st.text_input(
+                f"✏️ {label} (Suggested: {suggestion or '—'})",
+                value=default_final,
+                key=f"final_{form_id}_{label}"
+            )
+
+            if f.get("Thumb") and f.get("Issues"):
+                st.image(f["Thumb"], caption=f"{label} → {', '.join(f['Issues'])}", width=200)
+
+    flat_fields.extend([
+        {
+            "Form": form_id,
+            "Label": f["Label"],
+            "Raw": f["Raw"],
+            "Corrected": f["Corrected"],
+            "Final": f.get("Final", f["Corrected"]),
+            "Confidence": f["Confidence"],
+            "Issues": f.get("Issues", []),
+            "Suggestion": f.get("Suggestion"),
+            "Thumb": "Included" if f.get("Thumb") else "None"
+        }
+        for f in fields
+    ])
+
+# 📤 Export Section
+st.header("📤 Export Reviewed Data")
+
+df_export = pd.DataFrame(flat_fields)
 
 st.download_button(
-    label="📄 Download Fields as CSV",
-    data=df.drop(columns=["Thumb"]).to_csv(index=False),
-    file_name="registry_fields.csv",
+    label="📄 Download as CSV",
+    data=df_export.drop(columns=["Thumb"]).to_csv(index=False),
+    file_name="registry_reviewed.csv",
     mime="text/csv"
 )
 
 st.download_button(
-    label="📄 Download Fields as JSON",
+    label="📄 Download as JSON",
     data=json.dumps(flat_fields, indent=2, ensure_ascii=False),
-    file_name="registry_fields.json",
+    file_name="registry_reviewed.json",
     mime="application/json"
 )
 
-# 📊 Parsing Summary
-st.header("📊 Parsing Summary")
-
-valid_forms = [f for f in forms_parsed if not f["Missing"]]
-invalid_forms = [f for f in forms_parsed if f["Missing"]]
-
-st.markdown(f"✅ Fully parsed forms: **{len(valid_forms)}**")
-st.markdown(f"❌ Forms with missing fields: **{len(invalid_forms)}**")
-
-if invalid_forms:
-    st.subheader("🚨 Missing Fields Breakdown")
-    for f in invalid_forms:
-        st.markdown(f"- **Form {f['Form']}** → Missing: `{', '.join(f['Missing'])}`")
-
-# 📈 Confidence Overview
+# 📈 Confidence Summary
 st.header("📈 Confidence Overview")
 
-if not df.empty:
-    avg_conf = round(df["Confidence"].mean(), 2)
-    st.markdown(f"📌 Average confidence across all fields: **{avg_conf}%**")
+if not df_export.empty:
+    avg_conf = round(df_export["Confidence"].mean(), 2)
+    st.markdown(f"📌 Average field confidence: **{avg_conf}%**")
 
-    low_conf = df[df["Confidence"] < 50.0]
-    if not low_conf.empty:
+    low_conf_df = df_export[df_export["Confidence"] < 50.0]
+    if not low_conf_df.empty:
         st.subheader("🔍 Fields with Low Confidence (< 50%)")
-        st.dataframe(low_conf.drop(columns=["Thumb"]), use_container_width=True)
+        st.dataframe(low_conf_df.drop(columns=["Thumb"]), use_container_width=True)
 else:
-    st.markdown("⚠️ No field data available.")
+    st.warning("⚠️ No field data available.")
 
-# 🚨 Validation Issue Summary
+# 🚨 Validation Issues Summary
 st.header("🚨 Validation Issues")
 
 problematic = [f for f in flat_fields if f.get("Issues")]
 if problematic:
     st.dataframe(pd.DataFrame(problematic).drop(columns=["Thumb"]), use_container_width=True)
 else:
-    st.markdown("✅ No validation issues found.")
+    st.markdown("✅ No issues flagged.")
 
-# 💡 Suggested Corrections
-st.header("💡 Suggested Corrections for Flagged Fields")
+# 💡 Suggestions Review
+st.header("💡 Suggested Corrections")
 
 suggested = [f for f in flat_fields if f.get("Suggestion")]
 if suggested:
     for f in suggested:
         st.markdown(f"**Form {f['Form']} — {f['Label']}**")
-        st.markdown(f"🔍 Current: `{f['Corrected']}`")
-        st.markdown(f"💡 Suggested: `{f['Suggestion']}`")
+        st.markdown(f"🔍 Parsed: `{f['Corrected']}`")
+        st.markdown(f"💡 Suggested: `{f['Suggestion']}` → Final: `{f['Final']}`")
         st.markdown("---")
 else:
-    st.markdown("🟢 No auto-corrections available.")
+    st.markdown("🟢 No suggestions were applied.")
 
-# 🖼️ Field Thumbnails for Flagged Entries
-st.header("🖼️ Flagged Field Thumbnails")
-
-thumb_forms = [f for f in forms_parsed if any(x.get("Thumb") and x.get("Issues") for x in f["Fields"])]
-if thumb_forms:
-    for f in thumb_forms:
-        flagged = [x for x in f["Fields"] if x.get("Thumb") and x.get("Issues")]
-        if flagged:
-            st.subheader(f"📄 Form {f['Form']}")
-            for x in flagged:
-                st.image(x["Thumb"], caption=f"{x['Label']} → {', '.join(x['Issues'])}", width=200)
-else:
-    st.markdown("🟣 No flagged thumbnails to show.")
-
-# 💾 Export Fallback Layout Map
+# 💾 Fallback Box Layout Export
 if manual_boxes_per_form:
     st.header("📦 Fallback Box Layout Map")
     st.json(manual_boxes_per_form)
     st.download_button(
-        label="💾 Download Box Map as JSON",
+        label="💾 Download Box Layout as JSON",
         data=json.dumps(manual_boxes_per_form, indent=2, ensure_ascii=False),
         file_name="manual_boxes_per_form.json",
         mime="application/json"
