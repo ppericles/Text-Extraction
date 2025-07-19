@@ -12,12 +12,18 @@ def normalize(text):
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Crop to left side of image
+# Trim whitespace around content
+def trim_whitespace(image, threshold=245):
+    img_gray = image.convert("L")
+    bbox = img_gray.point(lambda p: p < threshold and 255).getbbox()
+    return image.crop(bbox) if bbox else image
+
+# Crop to left half
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Even vertical slicing with adjustable overlap
+# Slice image vertically with overlap
 def split_zones(image, overlap_px):
     w, h = image.size
     thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
@@ -28,9 +34,7 @@ def split_zones(image, overlap_px):
     ]
     zones = []
     for t, b in bounds:
-        top = max(0, t)
-        bottom = min(h, b)
-        zones.append(image.crop((0, top, w, bottom)).convert("RGB"))
+        zones.append(image.crop((0, max(0, t), w, min(h, b))).convert("RGB"))
     return zones
 
 # Send image to Document AI
@@ -50,7 +54,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract fields with label and confidence
+# Extract target fields with confidence
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
 
@@ -77,7 +81,7 @@ def extract_fields(doc, target_labels):
             merged_value += " " + items[j]["Value"]
             merged_conf = round((merged_conf + items[j]["Confidence"]) / 2, 2)
 
-            if normalize(merged_label).strip() in [normalize(t) for t in target_labels]:
+            if normalize(merged_label) in [normalize(t) for t in target_labels]:
                 extracted[merged_label.strip()] = {
                     "Raw": merged_value.strip(),
                     "Corrected": normalize(merged_value),
@@ -159,20 +163,23 @@ def convert_greek_month_dates(doc):
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
 st.title("🏛️ Registry OCR — Validated Extraction")
 
-# Interactive overlap slider
-overlap = st.sidebar.slider("🧩 Overlap between form zones (pixels)", min_value=0, max_value=120, value=60, step=10)
+# Sidebar controls
+overlap = st.sidebar.slider("🧩 Overlap between form zones (pixels)", 0, 120, value=60, step=10)
 cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred:
     with open("credentials.json", "wb") as f: f.write(cred.read())
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
+# Upload image
 file = st.file_uploader("📎 Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not file:
     st.info("ℹ️ Upload an image to begin")
     st.stop()
 
-img_left = crop_left(Image.open(file))
+image = Image.open(file)
+trimmed = trim_whitespace(image)
+img_left = crop_left(trimmed)
 zones = split_zones(img_left, overlap_px=overlap)
 
 project_id = "heroic-gantry-380919"
@@ -220,7 +227,7 @@ for i, zone_img in enumerate(zones, start=1):
         st.subheader("📅 Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
 
-# Export block
+# Export section
 st.header("💾 Export Data")
 
 flat_fields, flat_tables, flat_dates = [], [], []
