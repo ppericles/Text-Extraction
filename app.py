@@ -68,8 +68,8 @@ def extract_field_from_box_with_vision(pil_img, box, label):
     x1, y1 = int(x * w), int(y * h)
     x2, y2 = int((x + bw) * w), int((y + bh) * h)
 
-    # ✅ Safe conversion before cropping to avoid JPEG errors
-    cropped = pil_img.convert("RGB").crop((x1, y1, x2, y2))
+    zone_rgb = pil_img.convert("RGB")
+    cropped = zone_rgb.crop((x1, y1, x2, y2)).copy()  # ✅ safest JPEG-friendly crop
 
     buf = BytesIO()
     cropped.save(buf, format="JPEG")
@@ -113,13 +113,13 @@ if not uploaded_image:
     st.info("ℹ️ Please upload a registry image to continue.")
     st.stop()
 
-# Preprocess image
+# Image preprocessing
 original = Image.open(uploaded_image)
 cropped = crop_left(trim_whitespace(original))
 zones, bounds = split_zones_fixed(cropped, overlap)
 st.image(cropped, caption="🖼️ Trimmed Registry (Left Side)", use_container_width=True)
 
-# AI configuration
+# AI setup
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
@@ -129,12 +129,12 @@ target_labels = [
 
 forms_parsed = []
 
-# Zone loop
+# Main loop: one form per zone
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     zone_width, zone_height = zone.size
 
-    # Prefill fallback table
+    # Prefill fallback box editor
     existing = manual_boxes_per_form.get(str(idx), {})
     prefill_rows = []
     for label in target_labels:
@@ -159,7 +159,7 @@ for idx, zone in enumerate(zones, start=1):
         key=f"editor_{idx}"
     )
 
-    # Capture table input
+    # Store updated fallback boxes
     manual_boxes_per_form[str(idx)] = {}
     for _, row in box_editor.iterrows():
         label = row["Label"]
@@ -187,10 +187,9 @@ for idx, zone in enumerate(zones, start=1):
                 draw.text((x1, y1 - 16), label, fill="purple", font=font or None)
             except Exception:
                 st.warning(f"⚠️ Skipping '{label}' — invalid box: {box}")
-                continue
         st.image(overlay, caption="🟣 Defined Fallback Boxes", use_container_width=True)
 
-    # 🔍 Document AI parsing
+    # Document AI parsing
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     if not doc: continue
 
@@ -208,7 +207,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # 🩹 Merge results with Vision fallback
+    # Merge AI and fallback results
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"]:
