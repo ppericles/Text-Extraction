@@ -6,7 +6,6 @@ from io import BytesIO
 import numpy as np
 from google.cloud import documentai_v1 as documentai
 from google.cloud import vision
-from streamlit_drawable_canvas import st_canvas
 
 # Normalize Greek text
 def normalize(text):
@@ -16,6 +15,7 @@ def normalize(text):
     text = re.sub(r"[^\w\sΑ-ΩάέήίόύώΆΈΉΊΌΎΏ]", "", text)
     return text.upper().strip()
 
+# Trim whitespace around image
 def trim_whitespace(image, threshold=240, buffer=10):
     gray = image.convert("L")
     pixels = gray.load()
@@ -26,16 +26,19 @@ def trim_whitespace(image, threshold=240, buffer=10):
     right = next((x for x in reversed(range(w)) if any(pixels[x, y] < threshold for y in range(h))), w)
     return image.crop((max(0, left - buffer), max(0, top - buffer), min(w, right + buffer), min(h, bottom + buffer)))
 
+# Crop left side of registry
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
+# Split image into vertical zones
 def split_zones_fixed(image, overlap_px):
     w, h = image.size
     thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
     bounds = [(thirds[0], thirds[1] + overlap_px), (thirds[1] - overlap_px, thirds[2] + overlap_px), (thirds[2] - overlap_px, thirds[3])]
     return [image.crop((0, t, w, b)) for t, b in bounds], bounds
 
+# Call Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -50,6 +53,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
+# Vision OCR for fallback bounding boxes
 def extract_field_from_box_with_vision(pil_img, box):
     w, h = pil_img.size
     x, y, bw, bh = box
@@ -68,28 +72,12 @@ def extract_field_from_box_with_vision(pil_img, box):
         st.warning(f"🛑 Vision API Error: {response.error.message}")
         return ""
     return response.text_annotations[0].description.strip() if response.text_annotations else ""
-
-def draw_fallback_boxes(img, labels, box_map):
-    draw = ImageDraw.Draw(img)
-    w, h = img.size
-    try:
-        font = ImageFont.truetype("arial.ttf", size=14)
-    except:
-        font = None
-    for label in labels:
-        if label in box_map:
-            x, y, bw, bh = box_map[label]
-            x1, y1 = int(x * w), int(y * h)
-            x2, y2 = int((x + bw) * w), int((y + bh) * h)
-            draw.rectangle([(x1, y1), (x2, y2)], outline="purple", width=2)
-            draw.text((x1, y1 - 16), label, fill="purple", font=font or None)
-    return img
-# Title & layout
+# UI Layout
 st.set_page_config(layout="wide", page_title="Registry Parser")
-st.title("📜 Greek Registry Parser — AI + Manual Fallback")
+st.title("📜 Greek Registry Parser — Document AI + Vision AI Fallback")
 
-# Sidebar controls
-overlap = st.sidebar.slider("🔁 Form Zone Overlap", 0, 120, 60)
+# Sidebar Settings
+overlap = st.sidebar.slider("🔁 Vertical Zone Overlap", 0, 120, 60)
 cred_file = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f: f.write(cred_file.read())
@@ -105,20 +93,18 @@ if uploaded_box_map:
     except Exception as e:
         st.sidebar.error(f"📛 Failed to load box map: {e}")
 
-show_fallback_boxes = st.sidebar.checkbox("🟣 Show fallback overlays", value=True)
-
 uploaded_image = st.file_uploader("🖼️ Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not uploaded_image:
-    st.info("Please upload a registry image to begin.")
+    st.info("ℹ️ Please upload a registry image to continue.")
     st.stop()
 
-# Image preprocessing
+# Preprocess Image
 original = Image.open(uploaded_image)
 cropped = crop_left(trim_whitespace(original))
 zones, bounds = split_zones_fixed(cropped, overlap)
-st.image(cropped, caption="📘 Trimmed Registry (Left Side)", use_container_width=True)
+st.image(cropped, caption="🖼️ Processed Registry (Left Side)", use_container_width=True)
 
-# OCR config
+# Document AI Config
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
@@ -129,7 +115,7 @@ target_labels = [
 
 forms_parsed = []
 
-# Parse each form zone
+# Form Zone Loop
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
@@ -149,7 +135,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # Vision fallback
+    # Fallback via imported box map
     form_boxes = manual_boxes_per_form.get(str(idx), {})
     fields = []
     for label in target_labels:
@@ -174,51 +160,40 @@ for idx, zone in enumerate(zones, start=1):
     st.subheader("🧾 Extracted Fields")
     st.dataframe(pd.DataFrame(fields), use_container_width=True)
 
-    # Show overlay boxes
-    if show_fallback_boxes:
-        fallback_labels = [f["Label"] for f in fields if f["Confidence"] == 0.0 and f["Raw"]]
-        overlay = draw_fallback_boxes(zone.copy(), fallback_labels, form_boxes)
-        st.image(overlay, caption="🖼️ Vision AI Fallback Boxes", use_container_width=True)
+    # Manual Fallback Input via Table
+    st.subheader(f"✏️ Specify Fallback Boxes for Form {idx}")
+    default_rows = pd.DataFrame({
+        "Label": target_labels,
+        "X": [None]*len(target_labels),
+        "Y": [None]*len(target_labels),
+        "Width": [None]*len(target_labels),
+        "Height": [None]*len(target_labels)
+    })
 
-    # Canvas drawing (safe array conversion)
-    st.subheader("✍️ Manual Fallback Box Drawing")
-    try:
-        zone_array = np.array(zone.convert("RGB"))
-        assert zone_array.ndim == 3 and zone_array.shape[2] == 3
-        assert zone_array.size > 0
-    except Exception as e:
-        st.error(f"🛑 Canvas error for Form {idx}: {e}")
-        continue
-
-    canvas_result = st_canvas(
-        background_image=zone_array,
-        update_streamlit=True,
-        height=zone_array.shape[0],
-        width=zone_array.shape[1],
-        drawing_mode="rect",
-        stroke_color="purple",
-        key=f"canvas_{idx}",
-        display_toolbar=True
+    box_editor = st.experimental_data_editor(
+        default_rows,
+        use_container_width=True,
+        num_rows="dynamic",
+        key=f"box_editor_{idx}"
     )
 
-    if canvas_result.json_data and canvas_result.json_data.get("objects"):
-        manual_boxes_per_form[str(idx)] = {}
-        for obj in canvas_result.json_data["objects"]:
-            label = obj.get("label") or f"Box_{idx}"
-            x = obj["left"] / zone_array.shape[1]
-            y = obj["top"] / zone_array.shape[0]
-            w = obj["width"] / zone_array.shape[1]
-            h = obj["height"] / zone_array.shape[0]
+    manual_boxes_per_form[str(idx)] = {}
+    for _, row in box_editor.iterrows():
+        label = row["Label"]
+        x, y, w, h = row["X"], row["Y"], row["Width"], row["Height"]
+        if all(val is not None for val in [x, y, w, h]):
             manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
-        st.success(f"✅ Saved {len(manual_boxes_per_form[str(idx)])} box(es) for Form {idx}")
+
+    if manual_boxes_per_form[str(idx)]:
+        st.success(f"✅ Recorded {len(manual_boxes_per_form[str(idx)])} manual box(es) for Form {idx}")
 
     forms_parsed.append({
         "Form": idx,
         "Fields": fields,
         "Missing": [f["Label"] for f in fields if not f["Raw"].strip()]
     })
-# 📤 Export Parsed Fields
-st.header("📤 Export Parsed Fields")
+# 📤 Export Extracted Fields
+st.header("📤 Export Parsed Field Data")
 
 flat_fields = []
 for form in forms_parsed:
@@ -234,20 +209,20 @@ for form in forms_parsed:
 df = pd.DataFrame(flat_fields)
 
 st.download_button(
-    label="📄 Download as CSV",
+    label="📄 Download Fields as CSV",
     data=df.to_csv(index=False),
     file_name="registry_fields.csv",
     mime="text/csv"
 )
 
 st.download_button(
-    label="📄 Download as JSON",
+    label="📄 Download Fields as JSON",
     data=json.dumps(flat_fields, indent=2, ensure_ascii=False),
     file_name="registry_fields.json",
     mime="application/json"
 )
 
-# 📊 Summary Report
+# 📊 Parsing Summary
 st.header("📊 Form Parsing Summary")
 
 valid_forms = [f for f in forms_parsed if not f["Missing"]]
@@ -261,9 +236,9 @@ if invalid_forms:
     for f in invalid_forms:
         st.markdown(f"- **Form {f['Form']}** → Missing: `{', '.join(f['Missing'])}`")
 
-# 💾 Export Fallback Box Layouts
+# 💾 Export Fallback Box Maps
 if manual_boxes_per_form:
-    st.header("🧠 Export Fallback Box Maps")
+    st.header("🧠 Export Fallback Box Layouts")
     st.json(manual_boxes_per_form)
 
     st.download_button(
