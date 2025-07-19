@@ -34,15 +34,22 @@ def normalize(text):
 # 🧠 Flag field-level issues
 def validate_registry_field(label, corrected_text, confidence):
     issues = []
-    greek_chars = re.findall(r"[Α-ΩΆΈΉΊΌΎΏα-ωάέήίόύώ]", corrected_text or "")
     if not corrected_text:
         issues.append("Missing")
-    if len(greek_chars) < max(3, len(corrected_text) // 2):
-        issues.append("Non-Greek characters")
+
+    is_numeric = label == "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"
+    greek_chars = re.findall(r"[Α-ΩΆΈΉΊΌΎΏα-ωάέήίόύώ]", corrected_text or "")
+
+    if not is_numeric:
+        if len(greek_chars) < max(3, len(corrected_text) // 2):
+            issues.append("Non-Greek characters")
+
     if len(corrected_text) < 2:
         issues.append("Too short")
+
     if confidence < 50.0:
         issues.append("Low confidence")
+
     return issues
 
 # 💡 Suggest cleaned-up version
