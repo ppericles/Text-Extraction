@@ -12,18 +12,18 @@ def normalize(text):
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Crop to left half of image
+# Crop image to left side
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Divide image into vertical zones
+# Slice image into vertical zones
 def split_zones(image):
     w, h = image.size
     bounds = [(0.00, 0.32), (0.33, 0.65), (0.66, 1.00)]
     return [image.crop((0, int(h*t), w, int(h*b))).convert("RGB") for t, b in bounds]
 
-# Document AI parser
+# Send image to Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -40,7 +40,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract fields with label merging and only store if value is present
+# Extract fields with smart label matching and confidence
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
 
@@ -63,15 +63,11 @@ def extract_fields(doc, target_labels):
         merged_conf = conf
         found = False
 
-        for j in range(i+1, len(collected)):
+        for j in range(i + 1, len(collected)):
             merged_label += " " + collected[j]["Label"]
             merged_value += " " + collected[j]["Value"]
             merged_conf = round((merged_conf + collected[j]["Confidence"]) / 2, 2)
-
-            if merged_value.strip() and any(
-                normalize(merged_label).startswith(normalize(t)) or normalize(t) in normalize(merged_label)
-                for t in target_labels
-            ):
+            if normalize(merged_label).strip() in [normalize(t) for t in target_labels]:
                 extracted[merged_label.strip()] = {
                     "Raw": merged_value.strip(), "Corrected": normalize(merged_value),
                     "Confidence": merged_conf, "Schema": normalize(merged_label)
@@ -85,6 +81,7 @@ def extract_fields(doc, target_labels):
                 "Raw": value.strip(), "Corrected": normalize(value),
                 "Confidence": conf, "Schema": normalize(label)
             }
+
         i += 1
 
     fields = []
@@ -100,8 +97,8 @@ def extract_table(doc):
         for token in page.tokens:
             txt = token.layout.text_anchor.content or ""
             box = token.layout.bounding_poly.normalized_vertices
-            y = sum(v.y for v in box) / len(box)
-            x = sum(v.x for v in box) / len(box)
+            y = sum(v.y for v in box)/len(box)
+            x = sum(v.x for v in box)/len(box)
             tokens.append({"text": normalize(txt), "y": y, "x": x})
     if not tokens: return []
 
@@ -146,13 +143,14 @@ def convert_greek_month_dates(doc):
                     dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
     return sorted(set(dates))
 
-# 🖼️ Streamlit UI
+# Streamlit App
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
 st.title("🏛️ Registry OCR — Validated Extraction")
 
 cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred:
-    with open("credentials.json", "wb") as f: f.write(cred.read())
+    with open("credentials.json", "wb") as f:
+        f.write(cred.read())
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
@@ -179,19 +177,6 @@ for i, zone_img in enumerate(zones, start=1):
     doc = parse_docai(zone_img.copy(), project_id, processor_id, location)
     if not doc: continue
 
-    # 🔍 Debug toggle — show OCR tokens with confidence
-    if st.checkbox(f"🧪 Show raw OCR tokens from Form {i}", value=False):
-        tokens = []
-        for page in doc.pages:
-            for token in page.tokens:
-                txt = token.layout.text_anchor.content or ""
-                box = token.layout.bounding_poly.normalized_vertices
-                y = round(sum(v.y for v in box) / len(box), 3)
-                x = round(sum(v.x for v in box) / len(box), 3)
-                conf = round(token.layout.confidence * 100, 2)
-                tokens.append({"Token": txt, "X": x, "Y": y, "Confidence (%)": conf})
-        st.dataframe(pd.DataFrame(tokens), use_container_width=True)
-
     fields = extract_fields(doc, target_labels)
     table = extract_table(doc)
     dates = convert_greek_month_dates(doc)
@@ -216,7 +201,7 @@ for i, zone_img in enumerate(zones, start=1):
         st.subheader("📅 Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
 
-# 📦 Export Section
+# Final export
 st.header("💾 Export Data")
 
 flat_fields, flat_tables, flat_dates = [], [], []
