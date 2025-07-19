@@ -174,7 +174,7 @@ all_fields, all_tables, all_dates = [], [], []
 
 for i, zone_img in enumerate(zones, start=1):
     st.header(f"📄 Form {i}")
-    st.image(zone_img, caption=f"🧾 Zone {i}", use_column_width=True)
+    st.image(zone_img, caption=f"🧾 Zone {i}", use_container_width=True)
     doc = parse_docai(zone_img.copy(), project_id, processor_id, location)
     if not doc: continue
 
