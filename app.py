@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import os, json, unicodedata
 import pandas as pd
 import re
@@ -12,7 +12,7 @@ def normalize(text):
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
-# Trim outer white space using intensity scan
+# Trim surrounding white space
 def trim_whitespace(image, intensity_threshold=240, buffer=10):
     gray = image.convert("L")
     pixels = gray.load()
@@ -21,19 +21,18 @@ def trim_whitespace(image, intensity_threshold=240, buffer=10):
     bottom = next((y for y in reversed(range(h)) if any(pixels[x, y] < intensity_threshold for x in range(w))), h)
     left = next((x for x in range(w) if any(pixels[x, y] < intensity_threshold for y in range(h))), 0)
     right = next((x for x in reversed(range(w)) if any(pixels[x, y] < intensity_threshold for y in range(h))), w)
-
     top = max(0, top - buffer)
     bottom = min(h, bottom + buffer)
     left = max(0, left - buffer)
     right = min(w, right + buffer)
     return image.crop((left, top, right, bottom))
 
-# Crop to left half of image
+# Crop to left half
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Fixed vertical slicing with overlap
+# Fixed zone splitting
 def split_zones_fixed(image, overlap_px):
     w, h = image.size
     thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
@@ -45,32 +44,37 @@ def split_zones_fixed(image, overlap_px):
     zones = [image.crop((0, max(0, t), w, min(h, b))).convert("RGB") for t, b in bounds]
     return zones, bounds
 
-# Auto segment zones using horizontal gaps
-def split_zones_auto(image, min_gap_height=20):
-    gray = image.convert("L")
-    w, h = gray.size
-    histogram = [sum(gray.getpixel((x, y)) < 240 for x in range(w)) for y in range(h)]
-    gaps = [i for i in range(1, h) if histogram[i] < 5 and histogram[i-1] >= 5]
-    bounds = []
-    start = 0
-    for gap in gaps:
-        if gap - start > min_gap_height:
-            bounds.append((start, gap))
-            start = gap + 1
-    if start < h:
-        bounds.append((start, h))
-    zones = [image.crop((0, t, w, b)).convert("RGB") for t, b in bounds]
-    return zones, bounds
-
-# Draw overlay preview of zone bounds
+# Overlay zone bounds visually
 def show_zone_overlay(image, bounds, color="red", width=3):
-    overlay = image.copy()
-    draw = ImageDraw.Draw(overlay)
+    preview = image.copy()
+    draw = ImageDraw.Draw(preview)
     for top, bottom in bounds:
         draw.rectangle([(0, top), (image.width, bottom)], outline=color, width=width)
-    return overlay
+    return preview
 
-# Send image to Document AI
+# Overlay missing label estimates
+def overlay_missing_labels(zone_img, missing_labels, label_map, label_color="orange"):
+    draw = ImageDraw.Draw(zone_img)
+    w, h = zone_img.size
+    font = None
+    try:
+        font = ImageFont.truetype("arial.ttf", size=14)
+    except:
+        font = None
+
+    for label in missing_labels:
+        box = label_map.get(label)
+        if not box: continue
+        x, y, bw, bh = box
+        x1 = int(w * x)
+        y1 = int(h * y)
+        x2 = int(w * (x + bw))
+        y2 = int(h * (y + bh))
+        draw.rectangle([(x1, y1), (x2, y2)], outline=label_color, width=2)
+        draw.text((x1, y1 - 16), f"Missing: {label}", fill=label_color, font=font)
+    return zone_img
+
+# Document AI parsing
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -87,7 +91,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract form fields from page
+# Field extraction logic
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
     extracted = {}
@@ -107,7 +111,6 @@ def extract_fields(doc, target_labels):
         merged_label = label
         merged_value = value
         merged_conf = conf
-
         for j in range(i + 1, len(items)):
             merged_label += " " + items[j]["Label"]
             merged_value += " " + items[j]["Value"]
@@ -130,7 +133,6 @@ def extract_fields(doc, target_labels):
                     "Schema": normalize(label)
                 }
         i += 1
-
     fields = []
     for label in target_labels:
         f = extracted.get(label, {
@@ -148,7 +150,6 @@ def extract_table(doc):
             x = sum(v.x for v in box) / len(box)
             tokens.append({"text": normalize(txt), "y": y, "x": x})
     if not tokens: return []
-
     tokens.sort(key=lambda t: t["y"])
     rows, current, threshold = [], [], 0.01
     for tok in tokens:
@@ -159,7 +160,6 @@ def extract_table(doc):
             current = [tok]
     if current: rows.append(current)
     if len(rows) < 2: return []
-
     headers = [t["text"] for t in sorted(rows[0], key=lambda t: t["x"])]
     table = []
     for row in rows[1:]:
@@ -192,10 +192,10 @@ def convert_greek_month_dates(doc):
 
 # 🖼️ Streamlit UI
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
-st.title("🏛️ Registry OCR — Form Zone Extraction")
+st.title("🏛️ Registry OCR — Missing Field Visualization")
 
-overlap = st.sidebar.slider("🧩 Overlap between form zones (px)", 0, 120, 60, 10)
-auto_mode = st.sidebar.checkbox("🔍 Auto detect zones via whitespace", value=False)
+overlap = st.sidebar.slider("🧩 Overlap between zones", 0, 120, 60, 10)
+show_overlay = st.sidebar.checkbox("🟧 Show missing field boxes", value=True)
 cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred:
     with open("credentials.json", "wb") as f: f.write(cred.read())
@@ -210,40 +210,42 @@ if not file:
 image = Image.open(file)
 trimmed = trim_whitespace(image)
 img_left = crop_left(trimmed)
-
-zones, bounds = (
-    split_zones_auto(img_left) if auto_mode else split_zones_fixed(img_left, overlap_px=overlap)
-)
-
-preview = show_zone_overlay(img_left, bounds)
-st.image(preview, caption="📐 Zone Preview Overlay", use_container_width=True)
+zones, bounds = split_zones_fixed(img_left, overlap_px=overlap)
 
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
+
 target_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"
 ]
+
+# Estimated region map (x, y, w, h) for each field — tweak as needed
+label_regions = {
+    "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ": (0.05, 0.05, 0.4, 0.08),
+    "ΕΠΩΝΥΜΟΝ":         (0.05, 0.14, 0.4, 0.07),
+    "ΟΝΟΜΑ ΠΑΤΡΟΣ":     (0.05, 0.22, 0.4, 0.07),
+    "ΟΝΟΜΑ ΜΗΤΡΟΣ":     (0.05, 0.30, 0.4, 0.07),
+    "ΚΥΡΙΟΝ ΟΝΟΜΑ":     (0.05, 0.38, 0.4, 0.07)
+}
 
 parsed_forms = []
 
 for i, zone_img in enumerate(zones, start=1):
     st.header(f"📄 Form {i}")
-    st.image(zone_img, caption=f"🧾 Zone {i}", use_container_width=True)
     doc = parse_docai(zone_img.copy(), project_id, processor_id, location)
     if not doc: continue
-
     fields = extract_fields(doc, target_labels)
     table = extract_table(doc)
     dates = convert_greek_month_dates(doc)
-
     found_labels = [f["Label"] for f in fields if f["Raw"].strip()]
     missing_labels = [label for label in target_labels if label not in found_labels]
-
     st.subheader("🕵️ Field Label Report")
     st.markdown(f"✅ Found: `{', '.join(found_labels)}`")
     st.markdown(f"❌ Missing: `{', '.join(missing_labels)}`")
-
+    if show_overlay and missing_labels:
+        zone_img = overlay_missing_labels(zone_img.copy(), missing_labels, label_regions)
+    st.image(zone_img, caption=f"🧾 Zone {i}", use_container_width=True)
     parsed_forms.append({
         "Form": i,
         "Valid": len(missing_labels) == 0,
@@ -252,10 +254,8 @@ for i, zone_img in enumerate(zones, start=1):
         "Table": table,
         "Dates": dates
     })
-
     st.subheader("📋 Form Fields")
     st.dataframe(pd.DataFrame(fields), use_container_width=True)
-
     if table:
         st.subheader("🧾 Table")
         st.dataframe(pd.DataFrame(table), use_container_width=True)
@@ -263,7 +263,7 @@ for i, zone_img in enumerate(zones, start=1):
         st.subheader("📅 Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
 
-# 💾 Export Block
+# 💾 Export
 st.header("💾 Export Data")
 
 flat_fields, flat_tables, flat_dates = [], [], []
