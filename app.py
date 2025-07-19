@@ -68,8 +68,9 @@ def extract_field_from_box_with_vision(pil_img, box, label):
     x1, y1 = int(x * w), int(y * h)
     x2, y2 = int((x + bw) * w), int((y + bh) * h)
 
+    # ✅ Ensure JPEG-compatible image by converting then copying
     zone_rgb = pil_img.convert("RGB")
-    cropped = zone_rgb.crop((x1, y1, x2, y2)).copy()  # ✅ safest JPEG-friendly crop
+    cropped = zone_rgb.crop((x1, y1, x2, y2)).copy()
 
     buf = BytesIO()
     cropped.save(buf, format="JPEG")
@@ -134,22 +135,28 @@ for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     zone_width, zone_height = zone.size
 
-    # Prefill fallback box editor
+    # Prefill fallback box editor with auto-detection
     existing = manual_boxes_per_form.get(str(idx), {})
     prefill_rows = []
     for label in target_labels:
         box = existing.get(label, (None, None, None, None))
         try:
-            if normalize_input:
-                x_px, y_px, w_px, h_px = [float(v) for v in box]
-                x = x_px / zone_width
-                y = y_px / zone_height
-                w = w_px / zone_width
-                h = h_px / zone_height
+            x_raw, y_raw, w_raw, h_raw = [float(v) for v in box]
+            already_normalized = all(0.0 <= val <= 1.0 for val in (x_raw, y_raw, w_raw, h_raw))
+
+            if normalize_input and not already_normalized:
+                x = x_raw / zone_width
+                y = y_raw / zone_height
+                w = w_raw / zone_width
+                h = h_raw / zone_height
             else:
-                x, y, w, h = [float(v) if v is not None else None for v in box]
+                x, y, w, h = x_raw, y_raw, w_raw, h_raw
+
+            if any(val <= 0 or val > 1 for val in (w, h)):
+                raise ValueError("Box too small or oversized")
         except Exception:
             x, y, w, h = None, None, None, None
+
         prefill_rows.append({"Label": label, "X": x, "Y": y, "Width": w, "Height": h})
 
     box_editor = st.data_editor(
