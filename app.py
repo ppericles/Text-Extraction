@@ -1,11 +1,12 @@
 import streamlit as st
 import os, json, unicodedata, re
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import pandas as pd
 from io import BytesIO
 from collections import defaultdict
 from google.cloud import documentai_v1 as documentai
 from google.cloud import vision
+from streamlit_drawable_canvas import st_canvas
 
 # Normalize Greek text
 def normalize(text):
@@ -26,24 +27,22 @@ def trim_whitespace(image, threshold=240, buffer=10):
     right = next((x for x in reversed(range(w)) if any(pixels[x, y] < threshold for y in range(h))), w)
     return image.crop((max(0, left - buffer), max(0, top - buffer), min(w, right + buffer), min(h, bottom + buffer)))
 
-# Crop left side of registry
+# Crop left half of registry
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Split image vertically into overlapping zones
+# Split image vertically
 def split_zones_fixed(image, overlap_px):
     w, h = image.size
     thirds = [int(h * t) for t in [0.0, 0.33, 0.66, 1.0]]
     bounds = [(thirds[0], thirds[1] + overlap_px), (thirds[1] - overlap_px, thirds[2] + overlap_px), (thirds[2] - overlap_px, thirds[3])]
     return [image.crop((0, t, w, b)) for t, b in bounds], bounds
 
-# Parse with Document AI
+# Google Document AI
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
-        client = documentai.DocumentProcessorServiceClient(
-            client_options={"api_endpoint": f"{location}-documentai.googleapis.com"}
-        )
+        client = documentai.DocumentProcessorServiceClient(client_options={"api_endpoint": f"{location}-documentai.googleapis.com"})
         name = client.processor_path(project_id, location, processor_id)
         buf = BytesIO()
         pil_img.save(buf, format="JPEG")
@@ -53,7 +52,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Fallback OCR from bounding boxes using Google Vision
+# Google Vision AI fallback
 def extract_field_from_box_with_vision(pil_img, box):
     w, h = pil_img.size
     x, y, bw, bh = box
@@ -72,31 +71,60 @@ def extract_field_from_box_with_vision(pil_img, box):
         st.warning(f"🛑 Vision API Error: {response.error.message}")
         return ""
     return response.text_annotations[0].description.strip() if response.text_annotations else ""
+
+# Draw bounding boxes (purple)
+def draw_fallback_boxes(img, labels, box_map):
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+    try:
+        font = ImageFont.truetype("arial.ttf", size=14)
+    except:
+        font = None
+    for label in labels:
+        if label in box_map:
+            x, y, bw, bh = box_map[label]
+            x1, y1 = int(x * w), int(y * h)
+            x2, y2 = int((x + bw) * w), int((y + bh) * h)
+            draw.rectangle([(x1, y1), (x2, y2)], outline="purple", width=2)
+            draw.text((x1, y1 - 16), label, fill="purple", font=font or None)
+    return img
 # UI Setup
 st.set_page_config(layout="wide", page_title="Registry OCR Parser")
-st.title("📜 Greek Registry Parser — Streamlit + Google Document & Vision AI")
+st.title("📜 Greek Registry Parser — Document AI + Vision AI + Drawable Canvas")
 
 # Sidebar Controls
 overlap = st.sidebar.slider("🔄 Zone overlap height", 0, 120, 60, step=10)
+
 cred_file = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f: f.write(cred_file.read())
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
+uploaded_box_map = st.sidebar.file_uploader("📥 Load Saved Fallback Boxes", type=["json"])
+manual_boxes_per_form = {}
+if uploaded_box_map:
+    try:
+        manual_boxes_per_form = json.load(uploaded_box_map)
+        st.sidebar.success(f"✅ Loaded box map for {len(manual_boxes_per_form)} form(s)")
+    except Exception as e:
+        st.sidebar.error(f"📛 Failed to load box map: {e}")
+
+show_fallback_boxes = st.sidebar.checkbox("🟣 Show fallback bounding boxes", value=True)
+
 uploaded_image = st.file_uploader("🖼️ Upload Registry Page", type=["jpg", "jpeg", "png"])
 if not uploaded_image:
     st.info("ℹ️ Please upload a registry image to continue")
     st.stop()
 
-# Preprocess Image
+# Preprocess image
 original = Image.open(uploaded_image)
 cropped = crop_left(trim_whitespace(original))
 zones, bounds = split_zones_fixed(cropped, overlap)
 
 st.image(cropped, caption="🖼️ Registry (Left Side Only)", use_container_width=True)
 
-# OCR and Extraction Setup
+# OCR Setup
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
@@ -105,20 +133,15 @@ target_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", "ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"
 ]
 
-# Manual bounding boxes for fallback extraction
-manual_boxes = {
-    "ΟΝΟΜΑ ΠΑΤΡΟΣ": (0.05, 0.25, 0.4, 0.07),
-    "ΟΝΟΜΑ ΜΗΤΡΟΣ": (0.05, 0.34, 0.4, 0.07)
-}
-
-# Document Parsing Loop
 forms_parsed = []
+
+# Process each zone
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     if not doc: continue
 
-    # Extract recognized fields
+    # Extract fields via Document AI
     extracted = {}
     for page in doc.pages:
         for f in page.form_fields:
@@ -133,7 +156,8 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # Populate final field list
+    # Recover missing values via Vision AI fallback boxes
+    form_boxes = manual_boxes_per_form.get(str(idx), {})
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"].strip():
@@ -145,8 +169,8 @@ for idx, zone in enumerate(zones, start=1):
             })
         else:
             fallback_text = ""
-            if label in manual_boxes:
-                fallback_text = extract_field_from_box_with_vision(zone, manual_boxes[label])
+            if label in form_boxes:
+                fallback_text = extract_field_from_box_with_vision(zone, form_boxes[label])
             fields.append({
                 "Label": label,
                 "Raw": fallback_text,
@@ -157,13 +181,44 @@ for idx, zone in enumerate(zones, start=1):
     st.subheader("🧾 Extracted Fields")
     st.dataframe(pd.DataFrame(fields), use_container_width=True)
 
+    # Show fallback boxes overlay (optional)
+    if show_fallback_boxes:
+        fallback_labels = [f["Label"] for f in fields if f["Confidence"] == 0.0 and f["Raw"]]
+        zone_overlay = draw_fallback_boxes(zone.copy(), fallback_labels, form_boxes)
+        st.image(zone_overlay, caption="🖼️ Fallback Bounding Boxes (Vision AI)", use_container_width=True)
+
+    # Let user draw new boxes for this form
+    st.subheader("✍️ Draw or Edit Fallback Boxes")
+    canvas_result = st_canvas(
+        background_image=zone.copy(),
+        update_streamlit=True,
+        height=zone.height,
+        width=zone.width,
+        drawing_mode="rect",
+        stroke_color="purple",
+        key=f"canvas_{idx}",
+        display_toolbar=True
+    )
+
+    # Capture drawn boxes and update manual_boxes_per_form
+    if canvas_result.json_data and canvas_result.json_data.get("objects"):
+        manual_boxes_per_form[str(idx)] = {}
+        for obj in canvas_result.json_data["objects"]:
+            label = obj.get("label") or f"Box_{idx}"
+            x = obj["left"] / zone.width
+            y = obj["top"] / zone.height
+            w = obj["width"] / zone.width
+            h = obj["height"] / zone.height
+            manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
+        st.success(f"✅ Saved {len(manual_boxes_per_form[str(idx)])} box(es) for Form {idx}")
+
     forms_parsed.append({
         "Form": idx,
         "Fields": fields,
         "Missing": [f["Label"] for f in fields if not f["Raw"].strip()]
     })
-# 📤 Export Section
-st.header("📦 Export Parsed Field Data")
+# 📦 Export Extracted Fields
+st.header("📤 Export Parsed Fields")
 
 flat_fields = []
 for form in forms_parsed:
@@ -179,30 +234,40 @@ for form in forms_parsed:
 df = pd.DataFrame(flat_fields)
 
 st.download_button(
-    "📄 Download as CSV",
+    label="📄 Download Fields as CSV",
     data=df.to_csv(index=False),
     file_name="registry_fields.csv",
     mime="text/csv"
 )
 
 st.download_button(
-    "📄 Download as JSON",
+    label="📄 Download Fields as JSON",
     data=json.dumps(flat_fields, indent=2, ensure_ascii=False),
     file_name="registry_fields.json",
     mime="application/json"
 )
 
-# 📊 Summary Overview
-st.header("📊 Summary Report")
+# 📊 Summary Metrics
+st.header("📊 Parsing Summary")
 
 valid_forms = [f for f in forms_parsed if not f["Missing"]]
 invalid_forms = [f for f in forms_parsed if f["Missing"]]
 
-st.markdown(f"✅ Forms fully parsed: **{len(valid_forms)}**")
+st.markdown(f"✅ Fully parsed forms: **{len(valid_forms)}**")
 st.markdown(f"❌ Forms with missing fields: **{len(invalid_forms)}**")
 
 if invalid_forms:
-    st.subheader("🚨 Missing Fields Breakdown")
+    st.subheader("🚨 Missing Field Breakdown")
     for f in invalid_forms:
-        missing_list = ", ".join(f["Missing"])
-        st.markdown(f"- **Form {f['Form']}** → Missing: `{missing_list}`")
+        st.markdown(f"- **Form {f['Form']}** → Missing: `{', '.join(f['Missing'])}`")
+
+# 📁 Export Drawn Bounding Boxes
+if manual_boxes_per_form:
+    st.header("🧠 Export Fallback Box Maps")
+    st.json(manual_boxes_per_form)
+    st.download_button(
+        label="💾 Download Box Map as JSON",
+        data=json.dumps(manual_boxes_per_form, indent=2, ensure_ascii=False),
+        file_name="manual_boxes_per_form.json",
+        mime="application/json"
+    )
