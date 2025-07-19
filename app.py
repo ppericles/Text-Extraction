@@ -67,7 +67,7 @@ def extract_field_from_box_with_vision(pil_img, box):
         st.warning(f"🛑 Vision API Error: {response.error.message}")
         return ""
     return response.text_annotations[0].description.strip() if response.text_annotations else ""
-# App layout and sidebar controls
+# App layout & sidebar controls
 st.set_page_config(layout="wide", page_title="Registry Parser")
 st.title("📜 Greek Registry Parser — AI + Manual Fallbacks")
 
@@ -87,6 +87,9 @@ if uploaded_box_map:
     except Exception as e:
         st.sidebar.error(f"📛 Failed to load box map: {e}")
 
+# 🆕 Normalize checkbox
+normalize_input = st.checkbox("📏 Normalize pixel box map automatically", value=True)
+
 uploaded_image = st.file_uploader("🖼️ Upload Registry Image", type=["jpg", "jpeg", "png"])
 if not uploaded_image:
     st.info("ℹ️ Please upload a registry image to continue.")
@@ -98,7 +101,7 @@ cropped = crop_left(trim_whitespace(original))
 zones, bounds = split_zones_fixed(cropped, overlap)
 st.image(cropped, caption="🖼️ Trimmed Registry (Left Side)", use_container_width=True)
 
-# AI Configs
+# AI config
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
@@ -109,19 +112,30 @@ target_labels = [
 
 forms_parsed = []
 
-# Form zone loop
+# Zone loop
 for idx, zone in enumerate(zones, start=1):
     st.header(f"📄 Form {idx}")
+    zone_width, zone_height = zone.size
 
-    # Pre-fill table rows from imported box map if available
+    # Prefill fallback box table
     existing = manual_boxes_per_form.get(str(idx), {})
     prefill_rows = []
+
     for label in target_labels:
         box = existing.get(label, (None, None, None, None))
-        prefill_rows.append({"Label": label, "X": box[0], "Y": box[1], "Width": box[2], "Height": box[3]})
+        try:
+            if normalize_input:
+                x_px, y_px, w_px, h_px = [float(v) for v in box]
+                x = x_px / zone_width
+                y = y_px / zone_height
+                w = w_px / zone_width
+                h = h_px / zone_height
+            else:
+                x, y, w, h = [float(v) if v is not None else None for v in box]
+        except Exception:
+            x, y, w, h = None, None, None, None
+        prefill_rows.append({"Label": label, "X": x, "Y": y, "Width": w, "Height": h})
 
-    # Editable table input
-    st.subheader("✏️ Fallback Box Table")
     box_editor = st.data_editor(
         pd.DataFrame(prefill_rows),
         use_container_width=True,
@@ -129,7 +143,6 @@ for idx, zone in enumerate(zones, start=1):
         key=f"editor_{idx}"
     )
 
-    # Save inputs
     manual_boxes_per_form[str(idx)] = {}
     for _, row in box_editor.iterrows():
         label = row["Label"]
@@ -137,7 +150,7 @@ for idx, zone in enumerate(zones, start=1):
         if all(val is not None for val in (x, y, w, h)):
             manual_boxes_per_form[str(idx)][label] = (x, y, w, h)
 
-    # Overlay visual display
+    # Purple overlay display
     if manual_boxes_per_form[str(idx)]:
         overlay = zone.copy()
         draw = ImageDraw.Draw(overlay)
@@ -158,10 +171,9 @@ for idx, zone in enumerate(zones, start=1):
             except Exception:
                 st.warning(f"⚠️ Skipping '{label}' — invalid box: {box}")
                 continue
-
         st.image(overlay, caption="🟣 Defined Fallback Boxes", use_container_width=True)
 
-    # Document AI parsing
+    # Document AI parse
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     if not doc: continue
 
@@ -179,7 +191,7 @@ for idx, zone in enumerate(zones, start=1):
                         "Confidence": conf
                     }
 
-    # Merge fields + fallback
+    # Merge results with fallback recovery
     fields = []
     for label in target_labels:
         if label in extracted and extracted[label]["Raw"]:
@@ -237,7 +249,7 @@ st.download_button(
     mime="application/json"
 )
 
-# 📊 Parsing Summary
+# 📊 Summary Dashboard
 st.header("📊 Parsing Summary")
 
 valid_forms = [f for f in forms_parsed if not f["Missing"]]
@@ -252,9 +264,9 @@ if invalid_forms:
         missing_list = ", ".join(f["Missing"])
         st.markdown(f"- **Form {f['Form']}** → Missing: `{missing_list}`")
 
-# 💾 Fallback Box Layout Export
+# 💾 Export Fallback Box Layouts
 if manual_boxes_per_form:
-    st.header("🧠 Export Fallback Box Layout Map")
+    st.header("🧠 Export Fallback Box Map")
     st.json(manual_boxes_per_form)
 
     st.download_button(
