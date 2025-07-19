@@ -7,7 +7,7 @@ import cv2
 from io import BytesIO
 from google.cloud import documentai_v1 as documentai
 
-# 🧠 GCP setup
+# GCP Setup
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
 location = "eu"
@@ -15,13 +15,13 @@ docai_client = documentai.DocumentProcessorServiceClient(
     client_options={"api_endpoint": f"{location}-documentai.googleapis.com"}
 )
 
-# 🔤 Accent removal + uppercase
+# Normalize Greek text to uppercase and strip accents
 def normalize_greek_text(text):
     if not text: return ""
     no_accents = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
     return no_accents.upper()
 
-# 🧬 Field schema matching
+# Schema Mapping
 schema_map = {
     "ονομα": "name",
     "ονοματεπωνυμο": "name",
@@ -42,36 +42,34 @@ def map_label_to_schema(label):
             return key
     return "unknown"
 
-# ✂️ Crop to left half
+# Crop to left half
 def crop_left(image):
     image = image.convert("RGB")
     w, h = image.size
     return image.crop((0, 0, w // 2, h))
 
-# 🧼 Preprocess with blur
+# Preprocess with Gaussian Blur
 def preprocess(image):
     if image.width > 1500:
-        ratio = 1500 / image.width
-        image = image.resize((1500, int(image.height * ratio)))
+        image = image.resize((1500, int(image.height * 1500 / image.width)))
     np_img = np.array(image)
     gray = cv2.cvtColor(np_img, cv2.COLOR_RGB2GRAY)
     blurred = cv2.GaussianBlur(gray, (3, 3), 0)
     _, binarized = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return Image.fromarray(binarized)
 
-# 📄 Parse with Document AI
-def parse_docai(image):
+# Document AI Parsing
+def parse_docai(pil_img):
     name = docai_client.processor_path(project_id, location, processor_id)
-    buffer = BytesIO()
-    image.save(buffer, format="JPEG")
-    buffer.seek(0)
-    raw_doc = documentai.RawDocument(content=buffer.read(), mime_type="image/jpeg")
-    request = documentai.ProcessRequest(name=name, raw_document=raw_doc)
-    return docai_client.process_document(request=request).document
+    buf = BytesIO()
+    pil_img.save(buf, format="JPEG")
+    buf.seek(0)
+    raw_doc = documentai.RawDocument(content=buf.read(), mime_type="image/jpeg")
+    req = documentai.ProcessRequest(name=name, raw_document=raw_doc)
+    return docai_client.process_document(request=req).document
 
-# 📍 Group + schema + correct
-def group_fields(doc, image):
-    draw = ImageDraw.Draw(image)
+# Form Field Grouping
+def group_form_fields(doc):
     zones = {1: [], 2: [], 3: []}
     for page in doc.pages:
         for field in page.form_fields:
@@ -82,19 +80,37 @@ def group_fields(doc, image):
             avg_y = sum(v.y for v in box) / len(box)
             zone = 1 if avg_y < 0.33 else 2 if avg_y < 0.66 else 3
             corrected = normalize_greek_text(value.strip())
-            schema_key = map_label_to_schema(label)
+            schema = map_label_to_schema(label)
             zones[zone].append({
                 "Label": label.strip(),
                 "Raw Value": value.strip(),
                 "Corrected": corrected,
                 "Confidence": conf,
-                "Schema": schema_key
+                "Schema": schema
             })
     return zones
 
-# 🚀 Streamlit UI
-st.set_page_config(layout="wide", page_title="Greek Registry Transformer")
-st.title("🏛️ Greek Registry OCR — Structured, Accent-Free")
+# Table Extraction (Assumes bottom 1/3 with header + 10 rows)
+def extract_table(doc):
+    table_data = []
+    for page in doc.pages:
+        for table in page.tables:
+            headers = []
+            for col in table.header_rows[0].cells:
+                header = normalize_greek_text(col.layout.text_anchor.content or "").strip()
+                headers.append(header)
+            for row in table.body_rows:
+                row_data = {}
+                for i, cell in enumerate(row.cells):
+                    value = normalize_greek_text(cell.layout.text_anchor.content or "").strip()
+                    key = headers[i] if i < len(headers) else f"col_{i+1}"
+                    row_data[key] = value
+                table_data.append(row_data)
+    return table_data
+
+# Streamlit UI
+st.set_page_config(layout="wide", page_title="Greek Registry Parser — Forms & Table")
+st.title("🏛️ Greek Registry Parser — Forms + Historic Table")
 
 cred = st.sidebar.file_uploader("🔐 Upload GCP credentials", type=["json"])
 if cred:
@@ -107,19 +123,20 @@ uploaded = st.file_uploader("📎 Upload registry image", type=["jpg", "jpeg", "
 if not uploaded:
     st.stop()
 
-original = Image.open(uploaded)
-left = crop_left(original)
-processed = preprocess(left)
+orig = Image.open(uploaded)
+left = crop_left(orig)
+preproc = preprocess(left)
 
-st.image(original, caption="📜 Original Image", use_column_width=True)
-st.image(left, caption="◀️ Cropped Left Half", use_column_width=True)
-st.image(processed, caption="🧼 Preprocessed", use_column_width=True)
+st.image(orig, caption="📜 Full Image", use_column_width=True)
+st.image(preproc, caption="🧼 Preprocessed Left Half", use_column_width=True)
 
-with st.spinner("🔍 Running Document AI..."):
-    doc = parse_docai(processed.copy())
-    grouped = group_fields(doc, processed.copy())
+with st.spinner("🔍 Parsing image..."):
+    doc = parse_docai(preproc.copy())
+    grouped = group_form_fields(doc)
+    table_rows = extract_table(doc)
 
-all_data = []
+# Display Forms
+all_fields = []
 summary = []
 
 for zone in [1, 2, 3]:
@@ -150,12 +167,25 @@ for zone in [1, 2, 3]:
     avg = round(zone_conf / len(fields), 2)
     summary.append((zone, len(fields), avg))
     st.dataframe(pd.DataFrame(output), use_container_width=True)
-    all_data.extend(output)
+    all_fields.extend(output)
 
-st.subheader("📊 Confidence Summary")
+st.subheader("📊 Form Confidence Summary")
 st.dataframe(pd.DataFrame(summary, columns=["Form", "Fields", "Avg Confidence"]), use_container_width=True)
 
-st.subheader("💾 Export Structured Data")
-df = pd.DataFrame(all_data)
-st.download_button("CSV Export", df.to_csv(index=False), "registry_clean.csv", "text/csv")
-st.download_button("JSON Export", json.dumps(all_data, indent=2, ensure_ascii=False), "registry_clean.json", "application/json")
+# Display Table
+st.subheader("🧾 Table Entries (Historic Log)")
+if table_rows:
+    table_df = pd.DataFrame(table_rows)
+    st.dataframe(table_df, use_container_width=True)
+else:
+    st.info("No table rows found.")
+
+# Export
+st.subheader("💾 Export Data")
+form_df = pd.DataFrame(all_fields)
+st.download_button("Download Forms CSV", form_df.to_csv(index=False), "registry_forms.csv", "text/csv")
+st.download_button("Download Forms JSON", json.dumps(all_fields, indent=2, ensure_ascii=False), "registry_forms.json", "application/json")
+if table_rows:
+    table_df = pd.DataFrame(table_rows)
+    st.download_button("Download Table CSV", table_df.to_csv(index=False), "registry_table.csv", "text/csv")
+    st.download_button("Download Table JSON", json.dumps(table_rows, indent=2, ensure_ascii=False), "registry_table.json", "application/json")
