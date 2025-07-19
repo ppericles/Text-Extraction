@@ -12,27 +12,32 @@ def normalize(text):
     text = unicodedata.normalize("NFD", text)
     return ''.join(c for c in text if unicodedata.category(c) != "Mn").upper().strip()
 
+# Smart match between OCR label and target
+def match_label(text, targets):
+    norm_text = normalize(text)
+    for target in targets:
+        norm_target = normalize(target)
+        if norm_target in norm_text or norm_text in norm_target:
+            return target
+    return None
+
 # Crop image to left half
 def crop_left(image):
     w, h = image.size
     return image.convert("RGB").crop((0, 0, w // 2, h))
 
-# Smart zone splitting with buffer overlap
-def split_zones(image, overlap=50):
+# Split image into 3 zones with overlap
+def split_zones(image, overlap=60):
     w, h = image.size
-    one_third = h // 3
-
+    third = h // 3
     boundaries = [
-        (0, one_third + overlap),
-        (one_third - overlap, 2 * one_third + overlap),
-        (2 * one_third - overlap, h)
+        (0, third + overlap),
+        (third - overlap, 2 * third + overlap),
+        (2 * third - overlap, h)
     ]
-
     zones = []
     for top, bottom in boundaries:
-        top = max(0, top)
-        bottom = min(h, bottom)
-        zones.append(image.crop((0, top, w, bottom)).convert("RGB"))
+        zones.append(image.crop((0, max(0, top), w, min(h, bottom))).convert("RGB"))
     return zones
 
 # Send image to Document AI
@@ -52,7 +57,7 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI Error: {e}")
         return None
 
-# Extract fields with smart label merging
+# Extract fields with confidence and flexible label merging
 def extract_fields(doc, target_labels):
     if not doc or not doc.pages: return []
 
@@ -73,27 +78,31 @@ def extract_fields(doc, target_labels):
         merged_label = label
         merged_value = value
         merged_conf = conf
-        found = False
+        matched_target = match_label(merged_label, target_labels)
 
         for j in range(i + 1, len(collected)):
             merged_label += " " + collected[j]["Label"]
             merged_value += " " + collected[j]["Value"]
             merged_conf = round((merged_conf + collected[j]["Confidence"]) / 2, 2)
-            if normalize(merged_label).strip() in [normalize(t) for t in target_labels]:
-                extracted[merged_label.strip()] = {
-                    "Raw": merged_value.strip(), "Corrected": normalize(merged_value),
-                    "Confidence": merged_conf, "Schema": normalize(merged_label)
+            matched_target = match_label(merged_label, target_labels)
+            if merged_value.strip() and matched_target:
+                extracted[matched_target] = {
+                    "Raw": merged_value.strip(),
+                    "Corrected": normalize(merged_value),
+                    "Confidence": merged_conf,
+                    "Schema": normalize(matched_target)
                 }
                 i = j
-                found = True
                 break
-
-        if not found and label in target_labels:
-            extracted[label] = {
-                "Raw": value.strip(), "Corrected": normalize(value),
-                "Confidence": conf, "Schema": normalize(label)
-            }
-
+        else:
+            matched_target = match_label(label, target_labels)
+            if matched_target:
+                extracted[matched_target] = {
+                    "Raw": value.strip(),
+                    "Corrected": normalize(value),
+                    "Confidence": conf,
+                    "Schema": normalize(matched_target)
+                }
         i += 1
 
     fields = []
@@ -155,14 +164,13 @@ def convert_greek_month_dates(doc):
                     dates.append(f"{d.zfill(2)}/{m_num}/{y.zfill(4)}")
     return sorted(set(dates))
 
-# Streamlit UI
+# 🖼️ Streamlit UI
 st.set_page_config(layout="wide", page_title="Greek Registry Parser")
 st.title("🏛️ Registry OCR — Validated Extraction")
 
 cred = st.sidebar.file_uploader("🔐 GCP Credentials", type=["json"])
 if cred:
-    with open("credentials.json", "wb") as f:
-        f.write(cred.read())
+    with open("credentials.json", "wb") as f: f.write(cred.read())
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
     st.sidebar.success("✅ Credentials loaded")
 
@@ -172,7 +180,7 @@ if not file:
     st.stop()
 
 img_left = crop_left(Image.open(file))
-zones = split_zones(img_left, overlap=50)
+zones = split_zones(img_left, overlap=60)
 
 project_id = "heroic-gantry-380919"
 processor_id = "8f7f56e900fbb37e"
@@ -198,15 +206,13 @@ for i, zone_img in enumerate(zones, start=1):
     parsed_forms.append({
         "Form": i, "Valid": valid,
         "Missing": missing, "Fields": fields,
-        "Table": table,
-        "Dates": dates
+        "Table": table, "Dates": dates
     })
 
     st.subheader("📋 Form Fields")
     st.dataframe(pd.DataFrame(fields), use_container_width=True)
     if not valid:
         st.error(f"❌ Missing: {', '.join(missing)}")
-
     if table:
         st.subheader("🧾 Table")
         st.dataframe(pd.DataFrame(table), use_container_width=True)
@@ -214,33 +220,27 @@ for i, zone_img in enumerate(zones, start=1):
         st.subheader("📅 Dates")
         st.dataframe(pd.DataFrame(dates, columns=["Standardized Date"]), use_container_width=True)
 
-# Final Export Section
+# 💾 Final Export
 st.header("💾 Export Data")
 
 flat_fields, flat_tables, flat_dates = [], [], []
 for form in parsed_forms:
-    flat_fields.extend([
-        {"Form": form["Form"], **field} for field in form["Fields"]
-    ])
+    flat_fields.extend([{"Form": form["Form"], **field} for field in form["Fields"]])
     if form.get("Table"):
-        flat_tables.extend([
-            {"Form": form["Form"], **row} for row in form["Table"]
-        ])
+        flat_tables.extend([{"Form": form["Form"], **row} for row in form["Table"]])
     if form.get("Dates"):
-        flat_dates.extend([
-            {"Form": form["Form"], "Standardized Date": date} for date in form["Dates"]
-        ])
+        flat_dates.extend([{"Form": form["Form"], "Standardized Date": date} for date in form["Dates"]])
 
-forms_df = pd.DataFrame(flat_fields)
-st.download_button("📄 Download Forms CSV", forms_df.to_csv(index=False), "forms.csv", "text/csv")
+df_fields = pd.DataFrame(flat_fields)
+st.download_button("📄 Download Forms CSV", df_fields.to_csv(index=False), "forms.csv", "text/csv")
 st.download_button("📄 Download Forms JSON", json.dumps(flat_fields, indent=2, ensure_ascii=False), "forms.json", "application/json")
 
 if flat_tables:
-    tables_df = pd.DataFrame(flat_tables)
-    st.download_button("🧾 Download Tables CSV", tables_df.to_csv(index=False), "tables.csv", "text/csv")
+    df_tables = pd.DataFrame(flat_tables)
+    st.download_button("🧾 Download Tables CSV", df_tables.to_csv(index=False), "tables.csv", "text/csv")
     st.download_button("🧾 Download Tables JSON", json.dumps(flat_tables, indent=2, ensure_ascii=False), "tables.json", "application/json")
 
 if flat_dates:
-    dates_df = pd.DataFrame(flat_dates)
-    st.download_button("📅 Download Dates CSV", dates_df.to_csv(index=False), "dates.csv", "text/csv")
+    df_dates = pd.DataFrame(flat_dates)
+    st.download_button("📅 Download Dates CSV", df_dates.to_csv(index=False), "dates.csv", "text/csv")
     st.download_button("📅 Download Dates JSON", json.dumps(flat_dates, indent=2, ensure_ascii=False), "dates.json", "application/json")
