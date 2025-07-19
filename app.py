@@ -86,7 +86,7 @@ def extract_fields(doc, target_labels):
         })
         fields.append({"Label": label, **data})
     return fields
- def extract_table(doc):
+def extract_table(doc):
     tokens = []
     for page in doc.pages:
         for token in page.tokens:
