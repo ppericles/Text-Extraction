@@ -6,6 +6,7 @@ def trim_whitespace(image, threshold=240):
     """
     Trims white borders from the image.
     """
+    assert isinstance(image, Image.Image), "❌ trim_whitespace expects a PIL.Image"
     gray = image.convert("L")
     bbox = gray.point(lambda x: x < threshold and 255).getbbox()
     return image.crop(bbox) if bbox else image
@@ -22,11 +23,13 @@ def split_zones_fixed(image, master_ratio=0.5):
         zones: [zone1, zone2, zone3]
         bounds: [top_y, split_y, bottom_y]
     """
+    assert isinstance(image, Image.Image), "❌ split_zones_fixed expects a PIL.Image"
+
     h = image.height
     split_y = int(h * master_ratio)
-    zone1 = image.crop((0, 0, image.width, split_y))         # Master area
-    zone2 = image.crop((0, split_y, image.width, h))         # Detail area
-    zone3 = None  # Reserved for future use
+    zone1 = image.crop((0, 0, image.width, split_y))
+    zone2 = image.crop((0, split_y, image.width, h))
+    zone3 = None  # Reserved
 
     bounds = [0, split_y, h]
     return [zone1, zone2, zone3], bounds
@@ -42,6 +45,8 @@ def draw_zones_overlays(image, bounds):
     Returns:
         PIL.Image: Image with overlay lines
     """
+    assert isinstance(image, Image.Image), "❌ draw_zones_overlays expects a PIL.Image"
+
     overlay = image.copy()
     draw = ImageDraw.Draw(overlay)
 
@@ -61,6 +66,8 @@ def draw_layout_overlay(image, layout_dict):
     Returns:
         PIL.Image: Image with layout overlay
     """
+    assert isinstance(image, Image.Image), "❌ draw_layout_overlay expects a PIL.Image"
+
     overlay = image.copy()
     draw = ImageDraw.Draw(overlay)
     w, h = image.size
@@ -83,6 +90,8 @@ def resize_for_preview(image, max_width=800):
     Returns:
         PIL.Image: Resized image
     """
+    assert isinstance(image, Image.Image), "❌ resize_for_preview expects a PIL.Image"
+
     w, h = image.size
     if w <= max_width:
         return image
