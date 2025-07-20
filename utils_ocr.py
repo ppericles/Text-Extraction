@@ -3,6 +3,7 @@
 from io import BytesIO
 from google.cloud import vision
 from google.api_core.exceptions import ServiceUnavailable
+from PIL import Image
 import time
 
 def run_vision_ocr(image, max_retries=3):
@@ -18,16 +19,25 @@ def run_vision_ocr(image, max_retries=3):
     """
     client = vision.ImageAnnotatorClient()
 
-    # Convert PIL image to bytes
-    image_bytes = BytesIO()
-    image.save(image_bytes, format="PNG")
-    content = image_bytes.getvalue()
+    # 🧪 Diagnostic printout
+    print(f"[OCR] Image type: {type(image)}")
+
+    # ✅ Type check
+    if not isinstance(image, Image.Image):
+        return "❌ Invalid image object — must be a PIL.Image"
+
+    try:
+        image_bytes = BytesIO()
+        image.save(image_bytes, format="PNG")
+        content = image_bytes.getvalue()
+    except Exception as e:
+        return f"❌ Failed to convert image to bytes: {str(e)}"
 
     for attempt in range(max_retries):
         try:
             response = client.document_text_detection(image=vision.Image(content=content))
             return response
-        except ServiceUnavailable as e:
+        except ServiceUnavailable:
             time.sleep(2 ** attempt)
         except Exception as e:
             return f"❌ OCR error: {str(e)}"
@@ -48,7 +58,7 @@ def run_ocr(image, engine="vision", **kwargs):
     if engine == "vision":
         return run_vision_ocr(image, **kwargs)
     else:
-        return "⚠️ Unsupported OCR engine."
+        return f"⚠️ Unsupported OCR engine: {engine}"
 
 def parse_zone_text(image, engine="vision", **kwargs):
     """
