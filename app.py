@@ -167,6 +167,17 @@ def extract_field_from_box_with_vision(pil_img, box, label):
         st.warning(f"🛑 Vision OCR error for '{label}': {e}")
         return "", 0.0
 
+# 🧵 Extract substring from Document AI TextAnchor
+def extract_text_from_anchor(anchor, full_text):
+    if not anchor or not anchor.text_segments:
+        return ""
+    try:
+        segments = anchor.text_segments
+        return "".join(full_text[int(seg.start_index):int(seg.end_index)] for seg in segments)
+    except Exception as e:
+        st.warning(f"🧵 TextAnchor extraction failed: {e}")
+        return ""
+
 # 📄 Document AI wrapper targeting EU endpoint (v2.16+ SDK)
 def parse_docai(pil_image, project_id, processor_id, location):
     try:
