@@ -8,7 +8,6 @@ import tempfile
 from components.image_cropper import crop_and_confirm_forms
 from utils_image import (
     trim_whitespace,
-    deskew_image,
     split_zones_fixed,
     draw_zones_overlays,
     draw_layout_overlay,
@@ -70,9 +69,8 @@ if uploaded_files:
 
             # Preprocessing
             clean = trim_whitespace(img)
-            aligned = deskew_image(clean)
-            zones, bounds = split_zones_fixed(aligned)
-            preview = draw_zones_overlays(aligned, bounds)
+            zones, bounds = split_zones_fixed(clean)
+            preview = draw_zones_overlays(clean, bounds)
             st.image(resize_for_preview(preview), caption=f"📐 Zones for `{form_id}`", use_column_width=True)
 
             # Layout setup
