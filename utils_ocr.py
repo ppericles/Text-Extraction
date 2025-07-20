@@ -19,10 +19,7 @@ def run_vision_ocr(image, max_retries=3):
     """
     client = vision.ImageAnnotatorClient()
 
-    # 🧪 Diagnostic printout
     print(f"[OCR] Image type: {type(image)}")
-
-    # ✅ Type check
     if not isinstance(image, Image.Image):
         return "❌ Invalid image object — must be a PIL.Image"
 
@@ -80,3 +77,28 @@ def parse_zone_text(image, engine="vision", **kwargs):
         return ocr_results.full_text_annotation.text
     except AttributeError:
         return "⚠️ No text found in OCR response."
+
+def extract_fields_from_layout(zone_img, layout_dict, engine="vision", **kwargs):
+    """
+    Extracts text from each field box defined in the layout.
+
+    Args:
+        zone_img (PIL.Image): Zone image
+        layout_dict (dict): {label: [x1, y1, x2, y2]} in normalized coords
+        engine (str): OCR engine name
+
+    Returns:
+        dict: {label: extracted_text}
+    """
+    assert isinstance(zone_img, Image.Image), "❌ zone_img must be a PIL.Image"
+
+    w, h = zone_img.size
+    results = {}
+
+    for label, box in layout_dict.items():
+        x1, y1, x2, y2 = [int(coord * dim) for coord, dim in zip(box, [w, h, w, h])]
+        field_crop = zone_img.crop((x1, y1, x2, y2))
+        field_text = parse_zone_text(field_crop, engine=engine, **kwargs)
+        results[label] = field_text.strip() if isinstance(field_text, str) else "⚠️ No text found"
+
+    return results
