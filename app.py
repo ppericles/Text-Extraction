@@ -42,6 +42,12 @@ if cred_file:
 else:
     st.sidebar.warning("⚠️ Upload service account JSON to enable OCR.")
 
+# ==== Widget Inspector Panel ====
+st.sidebar.markdown("### 🧪 Widget Inspector")
+with st.sidebar.expander("Live Session State", expanded=False):
+    for k, v in st.session_state.items():
+        st.text(f"{k}: {v}")
+
 # ==== File Upload ====
 uploaded_files = st.file_uploader(
     "📤 Upload Registry Scans with Multiple Forms Per Image",
@@ -70,8 +76,9 @@ if uploaded_files:
             # Preprocessing
             clean = trim_whitespace(img)
 
+            slider_key = f"split_slider_{form_id}"
             st.markdown("### 🧩 Master / Detail Split")
-            master_ratio = st.slider("Adjust vertical split", 0.3, 0.7, value=0.5)
+            master_ratio = st.slider("Adjust vertical split", 0.3, 0.7, value=0.5, key=slider_key)
 
             zones, bounds = split_zones_fixed(clean, master_ratio=master_ratio)
             preview = draw_zones_overlays(clean, bounds)
@@ -104,10 +111,13 @@ if uploaded_files:
 
             for zid in ["1", "2", "3"]:
                 zone_img = zones[int(zid) - 1]
-                if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
-                    zone_ocr = parse_zone_text(zone_img, engine="vision")
+                if zone_img is not None:
+                    if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
+                        zone_ocr = parse_zone_text(zone_img, engine="vision")
+                    else:
+                        zone_ocr = "⚠️ OCR skipped — no credentials loaded."
                 else:
-                    zone_ocr = "⚠️ OCR skipped — no credentials loaded."
+                    zone_ocr = f"⚠️ Zone {zid} is empty — no image to parse."
                 trace.append(zone_ocr)
 
             ocr_traces[form_id] = trace
