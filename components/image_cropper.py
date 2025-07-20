@@ -15,8 +15,9 @@ def crop_and_confirm_forms(image, max_crops=5):
     Returns:
         list[PIL.Image]: Confirmed cropped images
     """
-    st.markdown("## ✂️ Manual Cropping")
+    assert isinstance(image, Image.Image), "❌ Input image must be a PIL.Image"
 
+    st.markdown("## ✂️ Manual Cropping")
     st.image(image, caption="🖼️ Original Image", use_column_width=True)
 
     crops = []
@@ -31,6 +32,9 @@ def crop_and_confirm_forms(image, max_crops=5):
             realtime_update=True,
             key=f"crop_{i}"
         )
+
+        assert isinstance(cropped_img, Image.Image), f"❌ Crop #{i + 1} is not a valid PIL.Image"
+
         st.image(cropped_img, caption=f"Crop #{i + 1}", use_column_width=True)
         st.json(crop_box, expanded=False)
 
