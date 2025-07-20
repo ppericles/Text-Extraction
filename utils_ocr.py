@@ -80,7 +80,7 @@ def parse_zone_text(image, engine="vision", **kwargs):
 
 def extract_fields_from_layout(zone_img, layout_dict, engine="vision", **kwargs):
     """
-    Extracts text from each field box defined in the layout.
+    Extracts text from each field box defined in the layout, with debug checks.
 
     Args:
         zone_img (PIL.Image): Zone image
@@ -97,8 +97,22 @@ def extract_fields_from_layout(zone_img, layout_dict, engine="vision", **kwargs)
 
     for label, box in layout_dict.items():
         x1, y1, x2, y2 = [int(coord * dim) for coord, dim in zip(box, [w, h, w, h])]
-        field_crop = zone_img.crop((x1, y1, x2, y2))
-        field_text = parse_zone_text(field_crop, engine=engine, **kwargs)
-        results[label] = field_text.strip() if isinstance(field_text, str) else "⚠️ No text found"
+
+        # 🧪 Diagnostic printout
+        print(f"[{label}] Crop box: ({x1}, {y1}, {x2}, {y2}) — Image size: ({w}, {h})")
+
+        # 🚨 Sanity check
+        if x2 <= x1 or y2 <= y1 or x1 < 0 or y1 < 0 or x2 > w or y2 > h:
+            print(f"❌ Invalid crop box for '{label}' — skipping")
+            results[label] = "⚠️ Invalid box"
+            continue
+
+        try:
+            field_crop = zone_img.crop((x1, y1, x2, y2))
+            field_text = parse_zone_text(field_crop, engine=engine, **kwargs)
+            results[label] = field_text.strip() if isinstance(field_text, str) else "⚠️ No text found"
+        except Exception as e:
+            print(f"❌ Error extracting '{label}': {str(e)}")
+            results[label] = f"❌ Extraction error: {str(e)}"
 
     return results
