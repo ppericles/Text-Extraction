@@ -18,8 +18,7 @@ from utils_image import (
     trim_whitespace,
     split_zones_fixed,
     split_master_zone_vertically,
-    draw_colored_zones,
-    draw_group_overlay
+    draw_colored_zones
 )
 
 # ==== Setup ====
@@ -79,9 +78,14 @@ if uploaded_files and project_id and location and processor_id:
         image = Image.open(file)
         clean = trim_whitespace(image)
 
+        # ==== Canvas Safety Guard ====
+        if not isinstance(clean, Image.Image):
+            st.error("🧯 Invalid image format — expected a PIL.Image.")
+            st.stop()
         if clean.mode != "RGB":
             clean = clean.convert("RGB")
 
+        # ==== Zone Splitting ====
         split_ratio = st.slider("📐 Vertical split ratio for master zone", 0.2, 0.8, value=0.3, step=0.01, key=f"split_{base_name}")
         zones, bounds = split_zones_fixed(clean, master_ratio=0.5)
         master_zone, detail_zone = zones
@@ -103,18 +107,24 @@ if uploaded_files and project_id and location and processor_id:
         col1.image(resize_for_preview(group_a), caption="🟦 Group A: ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", use_column_width=True)
         col2.image(resize_for_preview(group_b), caption="🟩 Group B: Other Fields", use_column_width=True)
 
+        # ==== Interactive Canvas ====
         st.markdown("### ✏️ Draw Field Zones")
-        canvas_result = st_canvas(
-            fill_color="rgba(0, 0, 255, 0.2)",
-            stroke_width=3,
-            background_image=clean,
-            update_streamlit=True,
-            height=clean.height,
-            width=clean.width,
-            drawing_mode="rect",
-            key=f"canvas_{base_name}"
-        )
+        try:
+            canvas_result = st_canvas(
+                fill_color="rgba(0, 0, 255, 0.2)",
+                stroke_width=3,
+                background_image=clean,
+                update_streamlit=True,
+                height=clean.height,
+                width=clean.width,
+                drawing_mode="rect",
+                key=f"canvas_{base_name}"
+            )
+        except Exception as e:
+            st.error("🧯 Canvas failed to load. Please check the image format or reload the app.")
+            st.stop()
 
+        # ==== Convert Canvas to Layout ====
         layout_dict = {}
         if canvas_result.json_data:
             for obj in canvas_result.json_data["objects"]:
@@ -125,6 +135,7 @@ if uploaded_files and project_id and location and processor_id:
                 y2 = (obj["top"] + obj["height"]) / clean.height
                 layout_dict[label] = [x1, y1, x2, y2]
 
+        # ==== Sidebar Field Editor ====
         st.sidebar.markdown("### ✏️ Edit Field Zones")
         edited_layout = {}
         field_types = ["Name", "Parent Name", "ID", "Date", "Location", "Custom"]
@@ -144,6 +155,7 @@ if uploaded_files and project_id and location and processor_id:
                 json.dump(edited_layout, f, indent=2)
             st.sidebar.success("✅ Edited layout saved.")
 
+        # ==== OCR & Matching ====
         fields_a = form_parser_ocr(group_a, project_id, location, processor_id)
         fields_b = form_parser_ocr(group_b, project_id, location, processor_id)
 
