@@ -13,7 +13,7 @@ def crop_and_confirm_forms(image, max_crops=5):
         max_crops (int): Max crops to offer
 
     Returns:
-        list[PIL.Image]: Confirmed cropped images
+        list[dict]: Confirmed cropped forms with image and rotation metadata
     """
     st.markdown("## ✂️ Manual Cropping")
 
@@ -39,17 +39,21 @@ def crop_and_confirm_forms(image, max_crops=5):
 
         confirm = st.checkbox(f"✅ Keep Crop #{i + 1}", value=True, key=f"confirm_{i}")
         if confirm:
-            crops.append(cropped_img)
+            crops.append({
+                "image": cropped_img,
+                "box": crop_box,
+                "angle": angle  # ✅ Store rotation for later correction
+            })
 
-    # 🔍 Confirmation grid
+    # 🔍 Final confirmation grid
     st.markdown("## 🔍 Confirm Final Selection")
     final = []
     cols = st.columns(3)
-    for idx, img in enumerate(crops):
+    for idx, form in enumerate(crops):
         with cols[idx % 3]:
-            st.image(img, caption=f"Form {idx + 1}", use_column_width=True)
+            st.image(form["image"], caption=f"Form {idx + 1}", use_column_width=True)
             keep = st.checkbox(f"Keep Form {idx + 1}", value=True, key=f"final_confirm_{idx}")
             if keep:
-                final.append(img)
+                final.append(form)
 
     return final
