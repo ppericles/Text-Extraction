@@ -116,3 +116,26 @@ def extract_fields_from_layout(zone_img, layout_dict, engine="vision", **kwargs)
             results[label] = f"❌ Extraction error: {str(e)}"
 
     return results
+
+def match_fields_with_fallback(expected_keys, extracted_fields, image, layout_dict):
+    """
+    Matches expected field labels to extracted keys.
+    If a field is missing, fallback to Vision OCR using layout box.
+    """
+    matched = {}
+    for expected in expected_keys:
+        for found_key in extracted_fields:
+            if expected in found_key or found_key in expected:
+                matched[expected] = extracted_fields[found_key]
+                break
+        else:
+            # Fallback to Vision OCR
+            box = layout_dict.get(expected)
+            if box:
+                w, h = image.size
+                x1, y1, x2, y2 = [int(coord * dim) for coord, dim in zip(box, [w, h, w, h])]
+                cropped = image.crop((x1, y1, x2, y2))
+                matched[expected] = parse_zone_text(cropped, engine="vision").strip()
+            else:
+                matched[expected] = "❌ Not found"
+    return matched
