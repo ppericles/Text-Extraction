@@ -69,7 +69,11 @@ if uploaded_files:
 
             # Preprocessing
             clean = trim_whitespace(img)
-            zones, bounds = split_zones_fixed(clean)
+
+            st.markdown("### 🧩 Master / Detail Split")
+            master_ratio = st.slider("Adjust vertical split", 0.3, 0.7, value=0.5)
+
+            zones, bounds = split_zones_fixed(clean, master_ratio=master_ratio)
             preview = draw_zones_overlays(clean, bounds)
             st.image(resize_for_preview(preview), caption=f"📐 Zones for `{form_id}`", use_column_width=True)
 
