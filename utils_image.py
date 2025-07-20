@@ -1,12 +1,13 @@
-# ==== FILE: utils_image.py ====
+# ==== FILE: utils_image.py - Image Cropping, Layout Tools, and Visual Overlays ====
+# Version: 1.0.0
+# Created: 2025-07-21
+# Author: Pericles & Copilot
+# Description: Functions for trimming whitespace, splitting zones, drawing overlays, and preparing image previews.
 
 from PIL import Image, ImageDraw
 import numpy as np
 
 def resize_for_preview(image, max_width=600):
-    """
-    Resize image for display in Streamlit preview.
-    """
     w, h = image.size
     if w > max_width:
         ratio = max_width / w
@@ -14,9 +15,6 @@ def resize_for_preview(image, max_width=600):
     return image
 
 def trim_whitespace(image, threshold=240):
-    """
-    Trims white borders from scanned form image.
-    """
     gray = image.convert("L")
     np_img = np.array(gray)
     mask = np_img < threshold
@@ -29,7 +27,7 @@ def trim_whitespace(image, threshold=240):
 
 def split_zones_fixed(image, master_ratio=0.5):
     """
-    Splits form image into master and detail zones vertically.
+    Splits the full form image horizontally into Master and Detail zones.
     """
     w, h = image.size
     split_y = int(h * master_ratio)
@@ -39,20 +37,38 @@ def split_zones_fixed(image, master_ratio=0.5):
 
 def split_master_zone_vertically(image, split_ratio=0.3):
     """
-    Splits master zone vertically into Group A (left) and Group B (right).
+    Splits the master zone vertically into Group A (left column) and Group B (right block).
     """
     w, h = image.size
     split_x = int(w * split_ratio)
-    group_a = image.crop((0, 0, split_x, h))         # Left column
-    group_b = image.crop((split_x, 0, w, h))          # Right column
+    group_a = image.crop((0, 0, split_x, h))
+    group_b = image.crop((split_x, 0, w, h))
     return group_a, group_b
 
-def draw_zones_overlays(image, bounds, color="red"):
+def draw_colored_zones(image, master_bounds, detail_bounds, group_bounds=None):
     """
-    Draws bounding boxes over zones for visual preview.
+    Draws color-coded overlays for master/detail zones and optional groups A/B.
     """
     overlay = image.copy()
     draw = ImageDraw.Draw(overlay)
-    for box in bounds:
-        draw.rectangle(box, outline=color, width=3)
+
+    draw.rectangle(master_bounds, outline="blue", width=3)
+    draw.rectangle(detail_bounds, outline="gold", width=3)
+
+    if group_bounds:
+        draw.rectangle(group_bounds["group_a"], outline="brown", width=3)
+        draw.rectangle(group_bounds["group_b"], outline="purple", width=3)
+
+    return overlay
+
+def draw_group_overlay(master_zone, split_ratio):
+    """
+    Draws overlay on master zone showing vertical split for Group A and Group B.
+    """
+    overlay = master_zone.copy()
+    draw = ImageDraw.Draw(overlay)
+    w, h = master_zone.size
+    split_x = int(w * split_ratio)
+    draw.rectangle((0, 0, split_x, h), outline="brown", width=3)
+    draw.rectangle((split_x, 0, w, h), outline="purple", width=3)
     return overlay
