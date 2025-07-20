@@ -1,11 +1,14 @@
-# ==== utils_image.py ====
+# ==== FILE: utils_image.py ====
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageChops
 
 def trim_whitespace(image):
     """
-    Trims white borders from an image.
+    Trims white borders from an image using background subtraction.
     """
+    if not isinstance(image, Image.Image):
+        raise TypeError("❌ Input must be a PIL.Image")
+
     bg = Image.new(image.mode, image.size, image.getpixel((0, 0)))
     diff = ImageChops.difference(image, bg)
     bbox = diff.getbbox()
@@ -15,7 +18,13 @@ def split_zones_fixed(image, master_ratio=0.5):
     """
     Splits image vertically into master/detail zones.
     """
+    if not isinstance(image, Image.Image):
+        raise TypeError("❌ Input must be a PIL.Image")
+
     w, h = image.size
+    if w == 0 or h == 0:
+        raise ValueError("❌ Image has invalid dimensions")
+
     split_y = int(h * master_ratio)
     zone1 = image.crop((0, 0, w, split_y))
     zone2 = image.crop((0, split_y, w, h))
@@ -65,7 +74,13 @@ def resize_for_preview(image, max_width=800):
     """
     Resizes image for display in Streamlit.
     """
+    if not isinstance(image, Image.Image):
+        raise TypeError("❌ Input must be a PIL.Image")
+
     w, h = image.size
+    if w == 0 or h == 0:
+        raise ValueError("❌ Image has invalid dimensions")
+
     if w > max_width:
         ratio = max_width / w
         return image.resize((int(w * ratio), int(h * ratio)))
