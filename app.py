@@ -167,10 +167,12 @@ def extract_field_from_box_with_vision(pil_img, box, label):
         st.warning(f"🛑 Vision OCR error for '{label}': {e}")
         return "", 0.0
 
-# 📄 Document AI wrapper (✅ compatible with ≥ 2.16.0)
+# 📄 Document AI wrapper targeting EU endpoint (v2.16+ SDK)
 def parse_docai(pil_image, project_id, processor_id, location):
     try:
-        client = documentai.DocumentProcessorServiceClient()
+        client = documentai.DocumentProcessorServiceClient(
+            client_options={"api_endpoint": "eu-documentai.googleapis.com"}
+        )
         image_bytes = BytesIO(); pil_image.save(image_bytes, format="JPEG")
         content = image_bytes.getvalue()
         name = f"projects/{project_id}/locations/{location}/processors/{processor_id}"
