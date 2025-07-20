@@ -81,7 +81,7 @@ if uploaded_files:
 
             slider_key = f"split_slider_{form_id}"
             st.markdown("### 🧩 Master / Detail Split")
-            master_ratio = st.slider("Adjust vertical split", 0.0, 1.0, value=0.5, step=0.05, key=slider_key)
+            master_ratio = st.slider("Adjust vertical split", 0.0, 1.0, value=0.5, step=0.01, key=slider_key)
 
             zones, bounds = split_zones_fixed(clean, master_ratio=master_ratio)
             preview = draw_zones_overlays(clean, bounds)
