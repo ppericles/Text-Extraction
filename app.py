@@ -81,6 +81,23 @@ def suggest_fix(label, text, issues):
             return fixed
     return None
 
+# 🛡️ Prevent runtime errors by initializing critical variables
+def init_context():
+    global document, original_image, metadata_rows, detail_rows
+    global box_layouts, layout_managers
+
+    if "document" not in globals(): document = None
+
+    if "original_image" not in globals():
+        original_image = Image.new("RGB", (800, 1000), color="white")
+
+    if "metadata_rows" not in globals(): metadata_rows = []
+    if "detail_rows" not in globals(): detail_rows = []
+    if "box_layouts" not in globals(): box_layouts = {}
+    if "layout_managers" not in globals(): layout_managers = {}
+
+# 🔧 Initialize context before registry parsing
+init_context()
 # ============================================================
 # 🔷 END: Part 1A
 # ============================================================
