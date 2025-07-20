@@ -79,7 +79,7 @@ if uploaded_files and project_id and location and processor_id:
         image = Image.open(file)
         clean = trim_whitespace(image)
 
-        split_ratio = st.slider("📐 Vertical split ratio for master zone", 0.2, 0.8, value=0.3, step=0.01, key=f"split_{base_name}")
+        split_ratio = st.slider("📐 Vertical split ratio for master zone", 0.0, 0.8, value=0.3, step=0.01, key=f"split_{base_name}")
         zones, bounds = split_zones_fixed(clean, master_ratio=0.5)
         master_zone = zones[0]
         detail_zone = zones[1]
