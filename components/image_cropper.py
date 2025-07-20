@@ -6,22 +6,28 @@ from PIL import Image
 
 def crop_and_confirm_forms(image, max_crops=5):
     """
-    Manually crop multiple forms from one scanned image, then confirm selections.
+    Crop multiple forms from one image, with optional rotation and confirmation.
 
     Args:
-        image (PIL.Image): The scanned image containing stacked forms
-        max_crops (int): Maximum number of crops allowed
+        image (PIL.Image): The scanned image
+        max_crops (int): Max crops to offer
 
     Returns:
-        list[PIL.Image]: List of confirmed cropped form images
+        list[PIL.Image]: Confirmed cropped images
     """
     st.markdown("## ✂️ Manual Cropping")
+
+    # 🔄 Rotation control
+    angle = st.slider("🔄 Rotate Image (degrees)", -180, 180, step=90, value=0)
+    rotated_image = image.rotate(angle, expand=True)
+    st.image(rotated_image, caption="🖼️ Rotated Image", use_column_width=True)
+
     crops = []
 
     for i in range(max_crops):
         st.markdown(f"### 🖼️ Crop #{i + 1}")
         cropped_img, crop_box = st_cropper(
-            image,
+            rotated_image,
             return_type="both",
             box_color="orange",
             aspect_ratio=None,
@@ -35,7 +41,7 @@ def crop_and_confirm_forms(image, max_crops=5):
         if confirm:
             crops.append(cropped_img)
 
-    # Final confirmation grid
+    # 🔍 Confirmation grid
     st.markdown("## 🔍 Confirm Final Selection")
     final = []
     cols = st.columns(3)
