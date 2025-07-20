@@ -285,146 +285,62 @@ for i, zone in enumerate(zones, start=1):
 # 🔷 END: Part 2A
 # ============================================================
 # ============================================================
-# 🔷 BEGIN: Part 2B — Metadata & Registry Parsing
+# 🔷 BEGIN: Part 2B — Registry QA, Table Parsing & Visualization
 # ============================================================
 
-# 🩹 Vision Fallback Trigger Helper
-def should_use_fallback(layout_dict):
-    if layout_loaded:
-        return True
-    for box in layout_dict.values():
-        if box and all(v is not None for v in box):
-            return True
-    return False
+st.header("📋 Registry QA & Table Extraction")
 
-for idx, zone in enumerate(zones, start=1):
-    zid = str(idx)
-    manager = layout_managers[zid]
-    st.header(f"📄 Zone {zid}")
+detail_rows = []
+if document and hasattr(document, "tables"):
+    for table_index, table in enumerate(document.tables):
+        form_id = f"Form_{table_index + 1}"
+        for row_index, row in enumerate(table.body_rows):
+            row_data = {"FormID": form_id}
+            for cell_index, cell in enumerate(row.cells):
+                text = extract_text_from_anchor(cell.layout.text_anchor, document.text).strip()
+                row_data[f"Column_{cell_index + 1}"] = text
+            detail_rows.append(row_data)
 
-    # 📐 Editable Box Layout
-    layout_pixels = manager.load_layout(box_layouts.get(zid, {}))
-    editor_rows = []
-    for label in master_field_labels:
-        box = layout_pixels.get(label)
-        x, y, w, h = box if box else (None, None, None, None)
-        editor_rows.append({"Label": label, "X": x, "Y": y, "Width": w, "Height": h})
+    st.success(f"✅ Extracted {len(detail_rows)} registry rows from table(s).")
+else:
+    st.warning("⚠️ No table data found in the Document AI response.")
 
-    editor_df = st.data_editor(
-        pd.DataFrame(editor_rows),
-        use_container_width=True,
-        num_rows="dynamic",
-        key=f"editor_{zid}"
-    )
+# 🧾 Table Cell Visualization with Bounding Boxes + Text
+st.subheader("🖼️ Table Cell Preview")
 
-    # 💾 Save edits to normalized layout
-    edited_layout = {
-        row["Label"]: (row["X"], row["Y"], row["Width"], row["Height"])
-        for _, row in editor_df.iterrows()
-        if all(v is not None for v in (row["X"], row["Y"], row["Width"], row["Height"]))
-    }
-    box_layouts[zid] = manager.save_layout(edited_layout)
+def bounding_poly_to_pixels(poly, image_size):
+    if not poly or not poly.vertices: return None
+    iw, ih = image_size
+    xs = [v.x * iw if v.x is not None else 0 for v in poly.vertices]
+    ys = [v.y * ih if v.y is not None else 0 for v in poly.vertices]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    return (int(xmin), int(ymin), int(xmax - xmin), int(ymax - ymin))  # (x, y, w, h)
 
-    # 🖍️ Draw boxes on image
-    overlay = zone.copy()
-    draw = ImageDraw.Draw(overlay)
-    for label, box in box_layouts[zid].items():
-        try:
-            x, y, w, h = manager.to_pixel(box)
-            draw.rectangle([(int(x), int(y)), (int(x + w), int(y + h))], outline="green", width=2)
-            draw.text((int(x), int(y - 14)), label, fill="green")
-        except:
-            pass
-    st.image(overlay, caption="📌 Master Field Boxes", use_column_width=True)
+def draw_table_boxes_with_text(image, document, full_text):
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("arial.ttf", size=12)
+    except:
+        font = ImageFont.load_default()
 
-    # 🧠 Run Document AI
-    if not all([project_id, processor_id, location]):
-        st.warning("📛 Missing Document AI configuration.")
-        continue
-
-    doc = parse_docai(zone.copy(), project_id, processor_id, location)
-    full_text = doc.text if doc else ""
-    field_map = {
-        label: {"Corrected": "", "Confidence": 0.0, "Issues": [], "Suggestion": None}
-        for label in master_field_labels
-    }
-
-    # 🔍 Extract Metadata via Document AI
-    if doc:
-        for page in doc.pages:
-            for f in page.form_fields:
-                label_raw = extract_text_from_anchor(f.field_name.text_anchor, full_text)
-                value_raw = extract_text_from_anchor(f.field_value.text_anchor, full_text)
-                label_norm = normalize(label_raw)
-                if label_norm in master_field_labels:
-                    corrected = normalize(value_raw)
-                    conf = round(f.field_value.confidence * 100, 2)
-                    issues = validate_registry_field(label_norm, corrected, conf)
-                    suggestion = suggest_fix(label_norm, corrected, issues)
-                    field_map[label_norm] = {
-                        "Corrected": corrected,
-                        "Confidence": conf,
-                        "Issues": issues,
-                        "Suggestion": suggestion
-                    }
-
-    # 🩹 Fallback: Vision OCR (only if layout loaded or user-defined boxes exist)
-    if should_use_fallback(box_layouts.get(zid, {})):
-        for label in master_field_labels:
-            if not field_map[label]["Corrected"]:
-                box = box_layouts[zid].get(label)
+    for table in document.tables:
+        for row in table.body_rows:
+            for cell in row.cells:
+                box = bounding_poly_to_pixels(cell.layout.bounding_poly, image.size)
                 if box:
-                    raw, conf = extract_field_from_box_with_vision(zone, box, label)
-                    corrected = normalize(raw)
-                    issues = validate_registry_field(label, corrected, conf)
-                    suggestion = suggest_fix(label, corrected, issues)
-                    field_map[label] = {
-                        "Corrected": corrected,
-                        "Confidence": conf,
-                        "Issues": issues,
-                        "Suggestion": suggestion
-                    }
+                    x, y, w, h = box
+                    draw.rectangle([x, y, x + w, y + h], outline="red", width=2)
+                    cell_text = extract_text_from_anchor(cell.layout.text_anchor, full_text).strip()
+                    if cell_text:
+                        draw.text((x + 3, y + 3), cell_text[:50], fill="black", font=font)
+    return image
 
-    # 🆔 Assign FormID
-    form_id = field_map["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"]["Corrected"] or f"ZONE_{zid}"
-    st.markdown(f"🆔 FormID: `{form_id}`")
-
-    # ✅ Store metadata
-    metadata_rows.append({
-        "FormID": form_id,
-        **{label: field_map[label]["Corrected"] for label in master_field_labels if label != "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"}
-    })
-
-    # 📊 Registry Table Columns
-    expected_columns = [
-        "Α/Α",
-        "ΤΟΜΟΣ",
-        "ΑΡΙΘ.",
-        "ΗΜΕΡΟΜΗΝΙΑ ΜΕΤΑΓΡΑΦΗΣ",
-        "ΑΡΙΘ. ΕΓΓΡΑΦΟΥ\nΚΑΙ ΕΤΟΣ ΑΥΤΟΥ",
-        "ΣΥΜΒΟΛΑΙΟΓΡΑΦΟΣ\nΉ Η ΕΚΔΟΥΣΑ ΑΡΧΗ"
-    ]
-
-    # 📄 Parse Registry Table Rows via Document AI
-    if doc:
-        for page in doc.pages:
-            for table in page.tables:
-                st.markdown(f"📑 Registry Table — Aligned Columns")
-                st.markdown(f"🔖 Columns: `{', '.join(expected_columns)}`")
-
-                for row in table.body_rows:
-                    row_data = {"FormID": form_id}
-                    for i in range(len(expected_columns)):
-                        key = expected_columns[i]
-                        if i < len(row.cells):
-                            cell = row.cells[i]
-                            value = extract_text_from_anchor(cell.layout.text_anchor, full_text)
-                            if key.strip() == "ΗΜΕΡΟΜΗΝΙΑ ΜΕΤΑΓΡΑΦΗΣ":
-                                value = normalize_date(value)
-                            row_data[key] = normalize(value)
-                        else:
-                            row_data[key] = ""
-                    detail_rows.append(row_data)
+if document and hasattr(document, "tables") and document.tables:
+    boxed_image = draw_table_boxes_with_text(original_image.copy(), document, document.text)
+    st.image(boxed_image, caption="📦 Table Cell Bounding Boxes with Text", use_container_width=True)
+else:
+    st.info("ℹ️ No table cells available to visualize.")
 
 # ============================================================
 # 🔷 END: Part 2B
