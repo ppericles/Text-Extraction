@@ -6,7 +6,7 @@
 
 import streamlit as st
 from PIL import Image
-from io import BytesIO
+import io
 import os
 import json
 import tempfile
@@ -79,19 +79,22 @@ if uploaded_files and project_id and location and processor_id:
         image = Image.open(file)
         clean = trim_whitespace(image)
 
-        split_ratio = st.slider("📐 Vertical split ratio for master zone", 0.0, 0.8, value=0.3, step=0.01, key=f"split_{base_name}")
+        if clean.mode != "RGB":
+            clean = clean.convert("RGB")
+
+        split_ratio = st.slider("📐 Vertical split ratio for master zone", 0.2, 0.8, value=0.3, step=0.01, key=f"split_{base_name}")
         zones, bounds = split_zones_fixed(clean, master_ratio=0.5)
-        master_zone = zones[0]
-        detail_zone = zones[1]
+        master_zone, detail_zone = zones
+        master_bounds, detail_bounds = bounds
 
         w_m, h_m = master_zone.size
         split_x = int(w_m * split_ratio)
         group_bounds = {
-            "group_a": (bounds[0][0], bounds[0][1], bounds[0][0] + split_x, bounds[0][3]),
-            "group_b": (bounds[0][0] + split_x, bounds[0][1], bounds[0][2], bounds[0][3]),
+            "group_a": (master_bounds[0], master_bounds[1], master_bounds[0] + split_x, master_bounds[3]),
+            "group_b": (master_bounds[0] + split_x, master_bounds[1], master_bounds[2], master_bounds[3]),
         }
 
-        overlay = draw_colored_zones(clean, bounds[0], bounds[1], group_bounds)
+        overlay = draw_colored_zones(clean, master_bounds, detail_bounds, group_bounds)
         st.image(resize_for_preview(overlay), caption="📐 Zone Debug Overlay", use_column_width=True)
 
         group_a, group_b = split_master_zone_vertically(master_zone, split_ratio)
@@ -104,7 +107,7 @@ if uploaded_files and project_id and location and processor_id:
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 255, 0.2)",
             stroke_width=3,
-            background_image=clean.convert("RGB"),
+            background_image=clean,
             update_streamlit=True,
             height=clean.height,
             width=clean.width,
@@ -144,8 +147,8 @@ if uploaded_files and project_id and location and processor_id:
         fields_a = form_parser_ocr(group_a, project_id, location, processor_id)
         fields_b = form_parser_ocr(group_b, project_id, location, processor_id)
 
-        matched_a = match_fields_with_fallback(expected_fields["group_a"], fields_a, group_a, {})
-        matched_b = match_fields_with_fallback(expected_fields["group_b"], fields_b, group_b, {})
+        matched_a = match_fields_with_fallback(expected_fields["group_a"], fields_a, group_a, edited_layout)
+        matched_b = match_fields_with_fallback(expected_fields["group_b"], fields_b, group_b, edited_layout)
 
         def show_results(title, matched_fields):
             st.markdown(f"### 🧾 {title}")
