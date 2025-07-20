@@ -45,14 +45,7 @@ if uploaded_files:
         image = Image.open(file)
         confirmed_forms = crop_and_confirm_forms(image, max_crops=5)
 
-        for idx, form in enumerate(confirmed_forms, start=1):
-            img = form["image"]
-            angle = form["angle"]
-
-            # 🔁 Undo rotation before processing
-            if angle != 0:
-                img = img.rotate(-angle, expand=True)
-
+        for idx, img in enumerate(confirmed_forms, start=1):
             form_id = f"{base_name}_form_{idx}"
             st.subheader(f"🧾 Processing `{form_id}`")
 
