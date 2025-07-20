@@ -6,7 +6,22 @@ import json
 import tempfile
 
 from utils_ocr import form_parser_ocr, match_fields_with_fallback
-from utils_image import resize_for_preview, trim_whitespace, split_zones_fixed, split_master_zone_vertically
+from utils_image import (
+    resize_for_preview,
+    trim_whitespace,
+    split_zones_fixed,
+    split_master_zone_vertically,
+    draw_zones_overlays
+)
+
+# ==== Config Setup ====
+CONFIG_PATH = "config/processor_config.json"
+os.makedirs("config", exist_ok=True)
+
+default_config = {"project_id": "", "location": "", "processor_id": ""}
+if os.path.exists(CONFIG_PATH):
+    with open(CONFIG_PATH) as f:
+        default_config = json.load(f)
 
 # ==== Page Setup ====
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
@@ -25,9 +40,20 @@ else:
     st.sidebar.warning("⚠️ OCR disabled — upload a service account JSON.")
 
 # ==== Processor Config ====
-project_id = st.sidebar.text_input("Project ID")
-location = st.sidebar.text_input("Location")
-processor_id = st.sidebar.text_input("Processor ID")
+st.sidebar.markdown("### ⚙️ Document AI Config")
+project_id = st.sidebar.text_input("Project ID", value=default_config.get("project_id", ""))
+location = st.sidebar.text_input("Location", value=default_config.get("location", ""))
+processor_id = st.sidebar.text_input("Processor ID", value=default_config.get("processor_id", ""))
+
+if st.sidebar.button("💾 Save Config"):
+    new_config = {
+        "project_id": project_id.strip(),
+        "location": location.strip(),
+        "processor_id": processor_id.strip()
+    }
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(new_config, f, indent=2)
+    st.sidebar.success("✅ Configuration saved.")
 
 # ==== File Upload ====
 uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
@@ -49,8 +75,11 @@ if uploaded_files and project_id and location and processor_id:
 
         # Split zones
         split_ratio = st.slider("📐 Vertical split ratio for master zone", 0.2, 0.8, value=0.3, step=0.01, key=f"split_{base_name}")
-        zones, _ = split_zones_fixed(clean, master_ratio=0.5)
+        zones, bounds = split_zones_fixed(clean, master_ratio=0.5)
         master_zone = zones[0]
+
+        preview = draw_zones_overlays(clean, bounds)
+        st.image(resize_for_preview(preview), caption="📐 Zones Preview", use_column_width=True)
 
         # Split master zone into groups
         group_a, group_b = split_master_zone_vertically(master_zone, split_ratio)
