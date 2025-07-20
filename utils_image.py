@@ -1,103 +1,90 @@
 # ==== utils_image.py ====
 
-from PIL import Image, ImageOps, ImageDraw, ImageFont
-import numpy as np
-import cv2
+from PIL import Image, ImageDraw
 
-def trim_whitespace(image, border=10):
+def trim_whitespace(image, threshold=240):
     """
-    Trim white margins from scanned image.
+    Trims white borders from the image.
     """
     gray = image.convert("L")
-    bw = np.array(gray) < 240
-    coords = np.argwhere(bw)
-    if coords.size == 0:
-        return image
-    y0, x0 = coords.min(axis=0)
-    y1, x1 = coords.max(axis=0)
-    cropped = image.crop((x0 - border, y0 - border, x1 + border, y1 + border))
-    return cropped
+    bbox = gray.point(lambda x: x < threshold and 255).getbbox()
+    return image.crop(bbox) if bbox else image
 
-def deskew_image(image):
+def split_zones_fixed(image, master_ratio=0.5):
     """
-    Deskew image using OpenCV moments.
-    """
-    img_cv = np.array(image.convert("L"))
-    _, thresh = cv2.threshold(img_cv, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    coords = np.column_stack(np.where(thresh > 0))
-    angle = cv2.minAreaRect(coords)[-1]
-    if angle < -45: angle += 90
-    center = tuple(np.array(image.size) / 2)
-    rot_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
-    rotated = cv2.warpAffine(np.array(image), rot_mat, image.size, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-    return Image.fromarray(rotated)
+    Splits image into two vertical zones: master and detail.
 
-def split_zones_fixed(image, split_ratio=[0.3, 0.6]):
-    """
-    Split image into 3 vertical zones based on fixed ratios.
-    """
-    w, h = image.size
-    y1 = int(h * split_ratio[0])
-    y2 = int(h * split_ratio[1])
-    zones = [
-        image.crop((0, 0, w, y1)),
-        image.crop((0, y1, w, y2)),
-        image.crop((0, y2, w, h))
-    ]
-    bounds = [(0, y1), (y1, y2), (y2, h)]
-    return zones, bounds
+    Args:
+        image (PIL.Image): The cropped form image
+        master_ratio (float): Ratio of vertical space for master zone (0.3–0.7)
 
-def draw_zones_overlays(image, bounds, color="green"):
+    Returns:
+        zones: [zone1, zone2, zone3]
+        bounds: [top_y, split_y, bottom_y]
     """
-    Draw horizontal zone boundaries on image.
+    h = image.height
+    split_y = int(h * master_ratio)
+    zone1 = image.crop((0, 0, image.width, split_y))         # Master area
+    zone2 = image.crop((0, split_y, image.width, h))         # Detail area
+    zone3 = None  # Reserved for future use
+
+    bounds = [0, split_y, h]
+    return [zone1, zone2, zone3], bounds
+
+def draw_zones_overlays(image, bounds):
+    """
+    Draws green horizontal lines to indicate zone boundaries.
+
+    Args:
+        image (PIL.Image): The full form image
+        bounds (list[int]): Y-coordinates of zone splits
+
+    Returns:
+        PIL.Image: Image with overlay lines
     """
     overlay = image.copy()
     draw = ImageDraw.Draw(overlay)
-    w, _ = image.size
-    for y1, y2 in bounds:
-        draw.line([(0, y1), (w, y1)], fill=color, width=2)
-        draw.line([(0, y2), (w, y2)], fill=color, width=2)
+
+    for y in bounds[1:-1]:  # Skip top and bottom
+        draw.line([(0, y), (image.width, y)], fill="green", width=3)
+
     return overlay
 
-def draw_layout_overlay(image, layout, box_color="blue", text_color="white", font_size=14):
+def draw_layout_overlay(image, layout_dict):
     """
-    Draw labeled layout boxes on the image.
+    Draws red boxes and labels over a zone image using normalized coordinates.
 
     Args:
         image (PIL.Image): Zone image
-        layout (dict): Field → [x, y, w, h] normalized box
-        box_color (str): Rectangle color
-        text_color (str): Label text color
-        font_size (int): Label font size
+        layout_dict (dict): {label: [x1, y1, x2, y2]} in normalized coords
 
     Returns:
-        PIL.Image: Image with overlay
+        PIL.Image: Image with layout overlay
     """
     overlay = image.copy()
     draw = ImageDraw.Draw(overlay)
     w, h = image.size
 
-    try:
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except:
-        font = ImageFont.load_default()
-
-    for label, box in layout.items():
-        x, y, bw, bh = box
-        x1, y1 = int(x * w), int(y * h)
-        x2, y2 = int((x + bw) * w), int((y + bh) * h)
-
-        draw.rectangle([x1, y1, x2, y2], outline=box_color, width=2)
-        draw.text((x1 + 4, y1 + 2), label, fill=text_color, font=font)
+    for label, box in layout_dict.items():
+        x1, y1, x2, y2 = [int(coord * dim) for coord, dim in zip(box, [w, h, w, h])]
+        draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
+        draw.text((x1 + 5, y1 + 5), label, fill="red")
 
     return overlay
 
 def resize_for_preview(image, max_width=800):
     """
-    Resize image for Streamlit preview.
+    Resizes image for Streamlit preview without distortion.
+
+    Args:
+        image (PIL.Image): Original image
+        max_width (int): Max width for display
+
+    Returns:
+        PIL.Image: Resized image
     """
     w, h = image.size
-    if w > max_width:
-        ratio = max_width / w
-        return image.resize((int(w * ratio), int(h * ratio)))
-    return image
+    if w <= max_width:
+        return image
+    ratio = max_width / w
+    return image.resize((int(w * ratio), int(h * ratio)))
