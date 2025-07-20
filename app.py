@@ -307,6 +307,18 @@ for i, zone in enumerate(zones, start=1):
 
 st.header("📋 Registry QA & Table Extraction")
 
+# 🧠 Document AI parsing
+document = parse_docai(pil_image, project_id, processor_id, location)
+
+# 🩺 Diagnostic check — confirm Document AI success
+if not document:
+    st.error("🛑 No Document AI response — check your credentials, endpoint, or image input.")
+elif not hasattr(document, "tables") or not document.tables:
+    st.warning("⚠️ Document AI returned no tables — check image clarity, zone setup, or endpoint configuration.")
+else:
+    st.success(f"✅ Document AI returned {len(document.tables)} table(s). Proceeding with extraction.")
+
+# 🧾 Parse registry rows from Document AI tables
 detail_rows = []
 if document and hasattr(document, "tables"):
     for table_index, table in enumerate(document.tables):
@@ -320,9 +332,9 @@ if document and hasattr(document, "tables"):
 
     st.success(f"✅ Extracted {len(detail_rows)} registry rows from table(s).")
 else:
-    st.warning("⚠️ No table data found in the Document AI response.")
+    st.warning("⚠️ No table rows found to extract.")
 
-# 🧾 Table Cell Visualization with Bounding Boxes + Text
+# 🖼️ Table Cell Visualization — Boxes + Text
 st.subheader("🖼️ Table Cell Preview")
 
 def bounding_poly_to_pixels(poly, image_size):
