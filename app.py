@@ -2,7 +2,7 @@
 
 import streamlit as st
 from PIL import Image
-from image_cropper import crop_image_ui, batch_crop_images_ui
+from components.image_cropper import crop_image_ui, batch_crop_images_ui
 from utils_image import trim_whitespace, deskew_image, split_zones_fixed, draw_zones_overlays, resize_for_preview
 from utils_layout import LayoutManager, ensure_zone_layout, register_layout_version, load_default_layout
 from utils_mock import generate_mock_metadata_batch, export_mock_dataset_with_layout_overlay
