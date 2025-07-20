@@ -433,6 +433,17 @@ for idx, zone in enumerate(zones, start=1):
 # 🔷 BEGIN: Part 3 — Metadata QA, Export & Layout Packaging
 # ============================================================
 
+# 🧼 Filter registry rows to remove empty or sparse entries
+def clean_detail_rows(rows, min_filled_fields=2, debug=False):
+    cleaned = []
+    for row in rows:
+        filled = sum(1 for k, v in row.items() if k != "FormID" and v.strip())
+        if filled >= min_filled_fields:
+            cleaned.append(row)
+        elif debug:
+            st.warning(f"🧹 Dropped sparse row: {row}")
+    return cleaned
+
 # 🧠 Metadata QA Interface
 st.header("📊 Metadata Review & Suggestions")
 auto_apply = st.checkbox("💡 Auto-apply Suggestions", value=False)
@@ -463,11 +474,12 @@ st.download_button("📄 Download Metadata JSON", json.dumps(final_metadata, ind
 
 # 📤 Registry Detail Table Export
 st.header("📤 Export Registry Table")
-df_detail = pd.DataFrame(detail_rows)
+cleaned_detail_rows = clean_detail_rows(detail_rows, min_filled_fields=2)
+df_detail = pd.DataFrame(cleaned_detail_rows)
 st.dataframe(df_detail, use_container_width=True)
 
 st.download_button("📄 Download Registry Table CSV", df_detail.to_csv(index=False), "registry_table.csv", mime="text/csv")
-st.download_button("📄 Download Registry Table JSON", json.dumps(detail_rows, indent=2, ensure_ascii=False), "registry_table.json", mime="application/json")
+st.download_button("📄 Download Registry Table JSON", json.dumps(cleaned_detail_rows, indent=2, ensure_ascii=False), "registry_table.json", mime="application/json")
 
 # 📑 Column Schema Export
 if not df_detail.empty:
