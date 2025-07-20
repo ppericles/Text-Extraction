@@ -37,7 +37,7 @@ def normalize_date(text):
         except: continue
     return text  # fallback if no format matched
 
-# 🔍 Field Validation Logic
+# 🛡️ Field Validation Logic
 def validate_registry_field(label, corrected_text, confidence):
     issues = []
     greek_chars = re.findall(r"[Α-ΩΆΈΉΊΌΎΏα-ωάέήίόύώ]", corrected_text or "")
