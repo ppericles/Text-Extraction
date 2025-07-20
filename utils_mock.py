@@ -2,6 +2,8 @@
 
 import os, json
 from PIL import Image
+from utils_image import draw_layout_overlay
+from utils_layout import LayoutManager
 
 def generate_mock_metadata_row(box_layouts, expected_labels, placeholder="XXXX", form_id="mock_001"):
     row = {}
@@ -19,41 +21,7 @@ def generate_mock_metadata_batch(box_layouts, expected_labels, count=10, placeho
         rows.append(row)
     return rows
 
-def export_mock_dataset(rows, zones, output_dir="training-set"):
-    """
-    Save each mock row as JSON + blank zone images.
-
-    Args:
-        rows (list): List of metadata dicts
-        zones (list): List of PIL.Image zones [zone1, zone2, zone3]
-        output_dir (str): Root folder to export dataset
-    """
-    os.makedirs(output_dir, exist_ok=True)
-
-    for row in rows:
-        form_id = row["FormID"]
-        folder = os.path.join(output_dir, form_id)
-        os.makedirs(folder, exist_ok=True)
-
-        # Save metadata
-        with open(os.path.join(folder, "metadata.json"), "w", encoding="utf-8") as f:
-            json.dump(row, f, indent=2, ensure_ascii=False)
-
-        # Save zone images
-        for i, zone_img in enumerate(zones, start=1):
-            zone_path = os.path.join(folder, f"zone_{i}.png")
-            zone_img.save(zone_path)
-
-def export_mock_dataset_with_ocr(rows, zones, ocr_traces, output_dir="training-set"):
-    """
-    Save each mock row + OCR trace + zone images.
-
-    Args:
-        rows (list): List of metadata dicts
-        zones (list): List of PIL.Image zones [zone1, zone2, zone3]
-        ocr_traces (dict): FormID → list of OCR dicts per zone
-        output_dir (str): Root folder to export dataset
-    """
+def export_mock_dataset_with_layout_overlay(rows, zones, box_layouts, ocr_traces, output_dir="training-set"):
     os.makedirs(output_dir, exist_ok=True)
 
     for row in rows:
@@ -70,6 +38,13 @@ def export_mock_dataset_with_ocr(rows, zones, ocr_traces, output_dir="training-s
         with open(os.path.join(folder, "ocr_trace.json"), "w", encoding="utf-8") as f:
             json.dump(trace, f, indent=2, ensure_ascii=False)
 
-        # Save zone images
+        # Save zone images + overlays
         for i, zone_img in enumerate(zones, start=1):
-            zone_img.save(os.path.join(folder, f"zone_{i}.png"))
+            zid = str(i)
+            zone_img.save(os.path.join(folder, f"zone_{zid}.png"))
+
+            layout = box_layouts.get(zid, {})
+            if layout:
+                manager = LayoutManager(zone_img.size)
+                overlay = draw_layout_overlay(zone_img, manager.load_layout(layout))
+                overlay.save(os.path.join(folder, f"zone_{zid}_overlay.png"))
