@@ -22,7 +22,10 @@ from utils_mock import (
     generate_mock_metadata_batch,
     export_mock_dataset_with_layout_overlay
 )
-from utils_ocr import parse_zone_text
+from utils_ocr import (
+    parse_zone_text,
+    extract_fields_from_layout
+)
 from utils_text import preview_metadata_row
 
 # ==== Page Setup ====
@@ -78,7 +81,7 @@ if uploaded_files:
 
             slider_key = f"split_slider_{form_id}"
             st.markdown("### 🧩 Master / Detail Split")
-            master_ratio = st.slider("Adjust vertical split", 0.0, 0.7, value=0.5, key=slider_key)
+            master_ratio = st.slider("Adjust vertical split", 0.0, 1.0, value=0.5, step=0.05, key=slider_key)
 
             zones, bounds = split_zones_fixed(clean, master_ratio=master_ratio)
             preview = draw_zones_overlays(clean, bounds)
@@ -121,6 +124,18 @@ if uploaded_files:
                 trace.append(zone_ocr)
 
             ocr_traces[form_id] = trace
+
+            # Field-level extraction
+            extracted_fields = {}
+            for zid in ["1", "2"]:
+                zone_img = zones[int(zid) - 1]
+                layout = box_layouts[zid]
+                fields = extract_fields_from_layout(zone_img, layout, engine="vision")
+                extracted_fields.update(fields)
+
+            st.markdown("### 🧾 Extracted Fields")
+            for label, value in extracted_fields.items():
+                st.text(f"{label}: {value}")
 
             mock_rows = generate_mock_metadata_batch(box_layouts, expected_labels, count=1, placeholder="XXXX")
             preview_metadata_row(mock_rows[0])
