@@ -2,6 +2,25 @@
 
 import re, unicodedata
 from datetime import datetime
+import streamlit as st
+
+def preview_metadata_row(row, title="🧾 Metadata Preview", threshold=40):
+    """
+    Display a single metadata row in Streamlit with collapsible long values.
+
+    Args:
+        row (dict): Metadata dictionary
+        title (str): Section title
+        threshold (int): Character count to trigger expander
+    """
+    st.subheader(title)
+    for key, value in row.items():
+        display_text = str(value).strip()
+        if len(display_text) > threshold:
+            with st.expander(f"{key} (click to expand)"):
+                st.text(display_text)
+        else:
+            st.text(f"{key}: {display_text}")
 
 # 🔡 Normalize Latin → Greek substitutions
 def fix_latin_greek(text):
