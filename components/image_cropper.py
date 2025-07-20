@@ -4,67 +4,46 @@ import streamlit as st
 from streamlit_cropper import st_cropper
 from PIL import Image
 
-def crop_image_ui(uploaded_file, return_type="both"):
+def crop_and_confirm_forms(image, max_crops=5):
     """
-    Crop a single image interactively and return image + crop box.
+    Manually crop multiple forms from one scanned image, then confirm selections.
 
     Args:
-        uploaded_file (UploadedFile): Streamlit file object
-        return_type (str): "image", "box", or "both"
+        image (PIL.Image): The scanned image containing stacked forms
+        max_crops (int): Maximum number of crops allowed
 
     Returns:
-        tuple: (cropped_image, crop_box)
+        list[PIL.Image]: List of confirmed cropped form images
     """
-    st.markdown("### ✂️ Crop Image")
-    image = Image.open(uploaded_file)
+    st.markdown("## ✂️ Manual Cropping")
+    crops = []
 
-    cropped_image, crop_box = st_cropper(
-        image,
-        return_type=return_type,
-        box_color="red",
-        aspect_ratio=None,
-        realtime_update=True
-    )
-
-    st.image(cropped_image, caption="Cropped Image", use_column_width=True)
-    st.json(crop_box, expanded=False)
-    return cropped_image, crop_box
-
-
-def batch_crop_images_ui(uploaded_files, return_type="both"):
-    """
-    Crop multiple images interactively and return image + crop box per file.
-
-    Args:
-        uploaded_files (list): List of Streamlit UploadedFile objects
-        return_type (str): "image", "box", or "both"
-
-    Returns:
-        dict: filename → {"image": cropped_image, "box": crop_box}
-    """
-    st.markdown("## ✂️ Batch Cropping")
-    results = {}
-
-    for file in uploaded_files:
-        name = file.name
-        st.markdown(f"### 🖼️ Cropping `{name}`")
-        image = Image.open(file)
-
-        cropped_image, crop_box = st_cropper(
+    for i in range(max_crops):
+        st.markdown(f"### 🖼️ Crop #{i + 1}")
+        cropped_img, crop_box = st_cropper(
             image,
-            return_type=return_type,
-            box_color="blue",
+            return_type="both",
+            box_color="orange",
             aspect_ratio=None,
             realtime_update=True,
-            key=name  # ensures unique widget state per image
+            key=f"crop_{i}"
         )
-
-        st.image(cropped_image, caption=f"Cropped `{name}`", use_column_width=True)
+        st.image(cropped_img, caption=f"Crop #{i + 1}", use_column_width=True)
         st.json(crop_box, expanded=False)
 
-        results[name] = {
-            "image": cropped_image,
-            "box": crop_box
-        }
+        confirm = st.checkbox(f"✅ Keep Crop #{i + 1}", value=True, key=f"confirm_{i}")
+        if confirm:
+            crops.append(cropped_img)
 
-    return results
+    # Final confirmation grid
+    st.markdown("## 🔍 Confirm Final Selection")
+    final = []
+    cols = st.columns(3)
+    for idx, img in enumerate(crops):
+        with cols[idx % 3]:
+            st.image(img, caption=f"Form {idx + 1}", use_column_width=True)
+            keep = st.checkbox(f"Keep Form {idx + 1}", value=True, key=f"final_confirm_{idx}")
+            if keep:
+                final.append(img)
+
+    return final
