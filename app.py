@@ -1,7 +1,7 @@
 # ==== FILE: app.py ====
 
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageDraw
 import os
 import tempfile
 import json
@@ -17,20 +17,31 @@ from utils_image import (
     draw_invalid_boxes_overlay,
     resize_for_preview
 )
+
 from utils_layout import (
     LayoutManager,
     ensure_zone_layout,
     load_default_layout
 )
+
 from utils_mock import (
     generate_mock_metadata_batch,
     export_mock_dataset_with_layout_overlay
 )
+
 from utils_ocr import (
     parse_zone_text,
     extract_fields_from_layout
 )
+
 from utils_text import preview_metadata_row
+
+# ==== Helper: Fallback Thumbnail ====
+def get_fallback_image(width=400, height=200, text="No zone image"):
+    img = Image.new("RGB", (width, height), color="lightgray")
+    draw = ImageDraw.Draw(img)
+    draw.text((10, height // 2 - 10), text, fill="black")
+    return img
 
 # ==== Page Setup ====
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
@@ -95,11 +106,18 @@ if uploaded_files:
 
             # ==== Layout Editor with Canvas ====
             layout_dicts = {}
+            save_dir = "saved-layouts"
+            os.makedirs(save_dir, exist_ok=True)
+
             for zid in ["1", "2"]:
                 st.markdown(f"### 🧱 Zone {zid} Layout Editor")
                 zone_img = zones[int(zid) - 1]
-                canvas_key = f"canvas_{form_id}_{zid}"
 
+                # Fallback if zone image is invalid
+                if not isinstance(zone_img, Image.Image) or zone_img.size == (0, 0):
+                    zone_img = get_fallback_image(text=f"Zone {zid} unavailable")
+
+                canvas_key = f"canvas_{form_id}_{zid}"
                 canvas_result = st_canvas(
                     fill_color="rgba(0, 255, 0, 0.3)",
                     stroke_width=3,
@@ -114,6 +132,7 @@ if uploaded_files:
                 def convert_to_layout_dict(objects, image_size):
                     layout = {}
                     w, h = image_size
+                    colors = ["green", "orange", "blue", "purple"]
                     for i, obj in enumerate(objects):
                         if obj["type"] == "rect":
                             left = obj["left"] / w
@@ -127,9 +146,16 @@ if uploaded_files:
                     layout_dict = convert_to_layout_dict(canvas_result.json_data["objects"], zone_img.size)
                     layout_dicts[zid] = layout_dict
 
+                    # Overlay with animated colors
                     overlay = draw_layout_overlay(zone_img, layout_dict)
                     st.image(resize_for_preview(overlay), caption=f"🔍 Zone {zid} Overlay", use_column_width=True)
 
+                    # Auto-save layout JSON
+                    with open(f"{save_dir}/{form_id}_zone_{zid}_layout.json", "w") as f:
+                        json.dump(layout_dict, f, indent=2)
+                    st.sidebar.success(f"📝 Saved layout: `{form_id}_zone_{zid}`")
+
+                    # Download button
                     json_str = json.dumps(layout_dict, indent=2)
                     st.download_button(
                         label=f"💾 Download Zone {zid} Layout JSON",
@@ -138,6 +164,7 @@ if uploaded_files:
                         mime="application/json"
                     )
 
+                    # Debug overlay
                     debug_overlay = draw_invalid_boxes_overlay(zone_img, layout_dict)
                     st.image(resize_for_preview(debug_overlay), caption=f"🚨 Invalid Fields in Zone {zid}", use_column_width=True)
 
