@@ -13,21 +13,21 @@ def crop_and_confirm_forms(image, max_crops=5):
         max_crops (int): Max crops to offer
 
     Returns:
-        list[dict]: Confirmed cropped forms with image and rotation metadata
+        list[PIL.Image]: Confirmed cropped images
     """
     st.markdown("## ✂️ Manual Cropping")
 
-    # 🔄 Rotation control
+    # 🔄 Rotate image once before cropping
     angle = st.slider("🔄 Rotate Image (degrees)", -180, 180, step=90, value=0)
-    rotated_image = image.rotate(angle, expand=True)
-    st.image(rotated_image, caption="🖼️ Rotated Image", use_column_width=True)
+    image = image.rotate(angle, expand=True)
+    st.image(image, caption="🖼️ Rotated Image", use_column_width=True)
 
     crops = []
 
     for i in range(max_crops):
         st.markdown(f"### 🖼️ Crop #{i + 1}")
         cropped_img, crop_box = st_cropper(
-            rotated_image,
+            image,
             return_type="both",
             box_color="orange",
             aspect_ratio=None,
@@ -39,21 +39,17 @@ def crop_and_confirm_forms(image, max_crops=5):
 
         confirm = st.checkbox(f"✅ Keep Crop #{i + 1}", value=True, key=f"confirm_{i}")
         if confirm:
-            crops.append({
-                "image": cropped_img,
-                "box": crop_box,
-                "angle": angle  # ✅ Store rotation for later correction
-            })
+            crops.append(cropped_img)
 
     # 🔍 Final confirmation grid
     st.markdown("## 🔍 Confirm Final Selection")
     final = []
     cols = st.columns(3)
-    for idx, form in enumerate(crops):
+    for idx, img in enumerate(crops):
         with cols[idx % 3]:
-            st.image(form["image"], caption=f"Form {idx + 1}", use_column_width=True)
+            st.image(img, caption=f"Form {idx + 1}", use_column_width=True)
             keep = st.checkbox(f"Keep Form {idx + 1}", value=True, key=f"final_confirm_{idx}")
             if keep:
-                final.append(form)
+                final.append(img)
 
     return final
