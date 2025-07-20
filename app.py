@@ -43,16 +43,21 @@ if uploaded_files:
         st.header(f"📄 `{file.name}` — Multi-Form Cropping")
 
         image = Image.open(file)
-
-        # ✂️ Manual cropping per image
         confirmed_forms = crop_and_confirm_forms(image, max_crops=5)
 
-        for idx, form_img in enumerate(confirmed_forms, start=1):
+        for idx, form in enumerate(confirmed_forms, start=1):
+            img = form["image"]
+            angle = form["angle"]
+
+            # 🔁 Undo rotation before processing
+            if angle != 0:
+                img = img.rotate(-angle, expand=True)
+
             form_id = f"{base_name}_form_{idx}"
             st.subheader(f"🧾 Processing `{form_id}`")
 
             # Preprocessing
-            clean = trim_whitespace(form_img)
+            clean = trim_whitespace(img)
             aligned = deskew_image(clean)
             zones, bounds = split_zones_fixed(aligned)
             preview = draw_zones_overlays(aligned, bounds)
@@ -69,13 +74,13 @@ if uploaded_files:
 
             for zid in ["1", "2"]:
                 st.markdown(f"### 🧱 Zone {zid} Layout — `{form_id}`")
-                img = zones[int(zid) - 1]
-                manager = LayoutManager(img.size)
+                img_zone = zones[int(zid) - 1]
+                manager = LayoutManager(img_zone.size)
                 layout_managers[zid] = manager
                 default_template = load_default_layout(zid, default_templates)
                 box_layouts[zid] = manager.save_layout(default_template)
 
-                overlay = draw_layout_overlay(img, box_layouts[zid])
+                overlay = draw_layout_overlay(img_zone, box_layouts[zid])
                 st.image(resize_for_preview(overlay), caption=f"🔍 Zone {zid} Overlay", use_column_width=True)
                 ensure_zone_layout(zid, expected_labels[zid], layout_managers, box_layouts, st)
 
