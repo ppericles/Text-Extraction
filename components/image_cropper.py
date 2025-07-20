@@ -6,7 +6,7 @@ from PIL import Image
 
 def crop_and_confirm_forms(image, max_crops=5):
     """
-    Crop multiple forms from one image, with optional rotation and confirmation.
+    Crop multiple forms from one image with confirmation.
 
     Args:
         image (PIL.Image): The scanned image
@@ -17,10 +17,7 @@ def crop_and_confirm_forms(image, max_crops=5):
     """
     st.markdown("## ✂️ Manual Cropping")
 
-    # 🔄 Rotate image once before cropping
-    angle = st.slider("🔄 Rotate Image (degrees)", -180, 180, step=90, value=0)
-    image = image.rotate(angle, expand=True)
-    st.image(image, caption="🖼️ Rotated Image", use_column_width=True)
+    st.image(image, caption="🖼️ Original Image", use_column_width=True)
 
     crops = []
 
