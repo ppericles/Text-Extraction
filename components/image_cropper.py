@@ -1,59 +1,70 @@
-# ==== image_cropper.py ====
+# ==== components/image_cropper.py ====
 
 import streamlit as st
-from PIL import Image
 from streamlit_cropper import st_cropper
+from PIL import Image
 
-def crop_image_ui(image, label="✂️ Crop Registry Scan", box_color="red"):
+def crop_image_ui(uploaded_file, return_type="both"):
     """
-    Display interactive cropper in Streamlit and return cropped image.
+    Crop a single image interactively and return image + crop box.
 
     Args:
-        image (PIL.Image): Original uploaded image
-        label (str): UI label above cropper
-        box_color (str): Rectangle color
+        uploaded_file (UploadedFile): Streamlit file object
+        return_type (str): "image", "box", or "both"
 
     Returns:
-        PIL.Image: Cropped image
+        tuple: (cropped_image, crop_box)
     """
-    st.subheader(label)
-    cropped_img = st_cropper(
+    st.markdown("### ✂️ Crop Image")
+    image = Image.open(uploaded_file)
+
+    cropped_image, crop_box = st_cropper(
         image,
-        realtime_update=True,
-        box_color=box_color,
+        return_type=return_type,
+        box_color="red",
         aspect_ratio=None,
-        return_type="PIL"
+        realtime_update=True
     )
-    st.image(cropped_img, caption="🖼️ Cropped Image Ready for Parsing", use_column_width=True)
-    return cropped_img
 
-def batch_crop_images_ui(uploaded_files, box_color="red"):
+    st.image(cropped_image, caption="Cropped Image", use_column_width=True)
+    st.json(crop_box, expanded=False)
+    return cropped_image, crop_box
+
+
+def batch_crop_images_ui(uploaded_files, return_type="both"):
     """
-    Crop multiple uploaded images interactively.
+    Crop multiple images interactively and return image + crop box per file.
 
     Args:
-        uploaded_files (list): List of uploaded file objects
-        box_color (str): Rectangle color
+        uploaded_files (list): List of Streamlit UploadedFile objects
+        return_type (str): "image", "box", or "both"
 
     Returns:
-        dict: Mapping of filename → cropped PIL image
+        dict: filename → {"image": cropped_image, "box": crop_box}
     """
-    cropped_results = {}
+    st.markdown("## ✂️ Batch Cropping")
+    results = {}
 
-    for idx, file in enumerate(uploaded_files, start=1):
-        st.markdown(f"---\n### ✂️ Crop Image {idx}: `{file.name}`")
-        image = Image.open(file).convert("RGB")
+    for file in uploaded_files:
+        name = file.name
+        st.markdown(f"### 🖼️ Cropping `{name}`")
+        image = Image.open(file)
 
-        cropped = st_cropper(
+        cropped_image, crop_box = st_cropper(
             image,
-            realtime_update=True,
-            box_color=box_color,
+            return_type=return_type,
+            box_color="blue",
             aspect_ratio=None,
-            return_type="PIL",
-            key=f"crop_{idx}"
+            realtime_update=True,
+            key=name  # ensures unique widget state per image
         )
 
-        st.image(cropped, caption=f"🖼️ Cropped Image {idx}", use_column_width=True)
-        cropped_results[file.name] = cropped
+        st.image(cropped_image, caption=f"Cropped `{name}`", use_column_width=True)
+        st.json(crop_box, expanded=False)
 
-    return cropped_results
+        results[name] = {
+            "image": cropped_image,
+            "box": crop_box
+        }
+
+    return results
