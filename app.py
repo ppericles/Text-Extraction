@@ -1,14 +1,30 @@
-# ==== app.py (Part 1) ====
+# ==== app.py ====
 
 import streamlit as st
 from PIL import Image
 from components.image_cropper import crop_image_ui, batch_crop_images_ui
-from utils_image import trim_whitespace, deskew_image, split_zones_fixed, draw_zones_overlays, resize_for_preview
-from utils_layout import LayoutManager, ensure_zone_layout, register_layout_version, load_default_layout
-from utils_mock import generate_mock_metadata_batch, export_mock_dataset_with_layout_overlay
+from utils_image import (
+    trim_whitespace,
+    deskew_image,
+    split_zones_fixed,
+    draw_zones_overlays,
+    draw_layout_overlay,
+    resize_for_preview
+)
+from utils_layout import (
+    LayoutManager,
+    ensure_zone_layout,
+    register_layout_version,
+    load_default_layout
+)
+from utils_mock import (
+    generate_mock_metadata_batch,
+    export_mock_dataset_with_layout_overlay
+)
 from utils_ocr import parse_zone_text
+from utils_text import preview_metadata_row
 
-st.set_page_config(page_title="Registry Parser", layout="wide")
+st.set_page_config(page_title="📄 Registry Parser", layout="wide")
 st.title("📄 Registry Form Parser")
 
 uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
@@ -44,46 +60,33 @@ if uploaded_files:
             layout_managers[zid] = manager
             default_template = load_default_layout(zid, default_templates)
             box_layouts[zid] = manager.save_layout(default_template)
-            overlay = draw_zones_overlays(img, [(0, img.size[1])])
-            st.image(overlay, caption=f"🔍 Zone {zid} Overlay", use_column_width=True)
+
+            overlay = draw_layout_overlay(img, box_layouts[zid])
+            st.image(resize_for_preview(overlay), caption=f"🔍 Zone {zid} Field Overlay", use_column_width=True)
             ensure_zone_layout(zid, expected_labels[zid], layout_managers, box_layouts, st)
-# ==== app.py (Part 2) ====
 
-from utils_mock import generate_mock_metadata_batch, export_mock_dataset_with_layout_overlay
-from utils_text import preview_metadata_row
-from utils_ocr import parse_zone_text
+        st.markdown(f"## 🔍 OCR + Metadata Export — `{name}`")
 
-# 🔄 OCR + metadata batch per file
-for name, cropped in cropped_images.items():
-    st.markdown(f"## 🔍 OCR + Mock Metadata Export — `{name}`")
+        ocr_traces = {}
+        form_id = f"{name.replace('.', '_')}_mock"
+        trace = []
 
-    # 🔧 Preprocess again if needed
-    clean = trim_whitespace(cropped)
-    aligned = deskew_image(clean)
-    zones, bounds = split_zones_fixed(aligned)
+        for zid in ["1", "2", "3"]:
+            zone_img = zones[int(zid) - 1]
+            zone_ocr = parse_zone_text(zone_img, engine="vision")
+            trace.append(zone_ocr)
 
-    # 🧠 OCR trace per zone
-    ocr_traces = {}
-    form_id = f"{name.replace('.', '_')}_mock"
-    trace = []
+        ocr_traces[form_id] = trace
 
-    for zid in ["1", "2", "3"]:
-        zone_img = zones[int(zid) - 1]
-        zone_ocr = parse_zone_text(zone_img, engine="vision")  # or "documentai"
-        trace.append(zone_ocr)
+        mock_rows = generate_mock_metadata_batch(box_layouts, expected_labels, count=1, placeholder="XXXX")
+        preview_metadata_row(mock_rows[0])
 
-    ocr_traces[form_id] = trace
+        export_mock_dataset_with_layout_overlay(
+            mock_rows,
+            zones,
+            box_layouts,
+            ocr_traces,
+            output_dir="training-set"
+        )
 
-    # 🧾 Generate mock metadata rows
-    mock_rows = generate_mock_metadata_batch(box_layouts, expected_labels, count=1, placeholder="XXXX")
-    preview_metadata_row(mock_rows[0])
-
-    # 📦 Export with overlays and OCR
-    export_mock_dataset_with_layout_overlay(
-        mock_rows,
-        zones,
-        box_layouts,
-        ocr_traces,
-        output_dir="training-set"
-    )
-    st.success(f"📁 Exported `{form_id}` to `training-set/`")
+        st.success(f"📁 Exported `{form_id}` to `training-set/`")
