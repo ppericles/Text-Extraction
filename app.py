@@ -167,7 +167,7 @@ def extract_field_from_box_with_vision(pil_img, box, label):
         st.warning(f"🛑 Vision OCR error for '{label}': {e}")
         return "", 0.0
 
-# 📄 Document AI wrapper using current client class
+# 📄 Document AI wrapper (✅ compatible with ≥ 2.16.0)
 def parse_docai(pil_image, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient()
