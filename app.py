@@ -79,9 +79,19 @@ if uploaded_files:
             # Preprocessing
             clean = trim_whitespace(img)
 
+            # ==== Persistent Split Slider ====
             slider_key = f"split_slider_{form_id}"
+            if slider_key not in st.session_state:
+                st.session_state[slider_key] = 0.5  # default value
+
             st.markdown("### 🧩 Master / Detail Split")
-            master_ratio = st.slider("Adjust vertical split", 0.0, 1.0, value=0.5, step=0.01, key=slider_key)
+            master_ratio = st.slider(
+                "Adjust vertical split",
+                0.0, 1.0,
+                value=st.session_state[slider_key],
+                step=0.01,
+                key=slider_key
+            )
 
             zones, bounds = split_zones_fixed(clean, master_ratio=master_ratio)
             preview = draw_zones_overlays(clean, bounds)
