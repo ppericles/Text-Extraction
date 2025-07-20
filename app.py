@@ -8,7 +8,7 @@ import pandas as pd
 from google.cloud import documentai_v1 as documentai
 from google.cloud import vision
 
-# 🔡 Normalize Greek Text
+# 🔡 Latin & Cyrillic → Greek normalization
 def fix_latin_greek(text):
     return "".join({
         "A": "Α", "B": "Β", "E": "Ε", "H": "Η", "K": "Κ", "M": "Μ",
@@ -29,7 +29,7 @@ def normalize(text):
     text = re.sub(r"[^\w\sΑ-ΩάέήίόύώΆΈΉΊΌΎΏ]", "", text)
     return text.upper().strip()
 
-# 📅 Normalize Dates
+# 📅 Normalize Greek-style dates
 def normalize_date(text):
     text = text.strip()
     for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d/%m/%y", "%d-%m-%y"]:
@@ -37,28 +37,25 @@ def normalize_date(text):
         except: continue
     return text
 
-# 🛡️ Field Validation
+# 🛡️ Metadata field validation
 def validate_registry_field(label, corrected_text, confidence):
     issues = []
     greek_chars = re.findall(r"[Α-ΩΆΈΉΊΌΎΏα-ωάέήίόύώ]", corrected_text or "")
-    if not corrected_text:
-        issues.append("Missing")
-    if label != "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ" and len(greek_chars) < max(3, len(corrected_text)//2):
+    if not corrected_text: issues.append("Missing")
+    if label != "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ" and len(greek_chars) < max(3, len(corrected_text) // 2):
         issues.append("Non-Greek characters")
-    if len(corrected_text) < 2:
-        issues.append("Too short")
-    if confidence < 50.0:
-        issues.append("Low confidence")
+    if len(corrected_text) < 2: issues.append("Too short")
+    if confidence < 50.0: issues.append("Low confidence")
     return issues
 
-# 💡 Suggest Fix
+# 💡 Field suggestion helper
 def suggest_fix(label, corrected_text, issues):
     if "Too short" in issues or "Non-Greek characters" in issues:
         fixed = corrected_text.title()
         if len(fixed) >= 2 and re.match(r"^[Α-ΩΆΈΉΊΌΎΏ][α-ωάέήίόύώ]{2,}", fixed): return fixed
     return None
 
-# ✂️ Crop Functions
+# ✂️ Image pre-processing
 def trim_whitespace(image, threshold=240, buffer=10):
     gray = image.convert("L")
     pixels = gray.load()
@@ -84,10 +81,9 @@ def split_zones_fixed(image, overlap_px):
     zones = [image.crop((0, t, w, b)) for t, b in bounds]
     return zones, bounds
 
-# 📐 Coordinate Scaling
+# 📐 Convert between coordinate formats
 def convert_box(box, image_size, to_normalized=True):
-    if not box or any(v is None for v in box):
-        return (None, None, None, None)
+    if not box or any(v is None for v in box): return (None, None, None, None)
     x, y, w, h = box
     iw, ih = image_size
     return (
@@ -95,7 +91,7 @@ def convert_box(box, image_size, to_normalized=True):
         else (x * iw, y * ih, w * iw, h * ih)
     )
 
-# 🧠 Confidence Estimation
+# 🧠 OCR confidence estimation
 def estimate_confidence(label, text):
     text = text.strip()
     if not text: return 0.0
@@ -104,7 +100,7 @@ def estimate_confidence(label, text):
         return 75.0 if re.match(r"^[Α-ΩΆΈΉΊΌΎΏα-ωάέήίόύώ\s\-]{3,}$", text) else 30.0
     return 50.0
 
-# 🩹 Vision OCR Fallback
+# 🩹 Vision OCR fallback
 def extract_field_from_box_with_vision(pil_img, box, label):
     try:
         x, y, w, h = convert_box(box, pil_img.size, to_normalized=False)
@@ -119,7 +115,7 @@ def extract_field_from_box_with_vision(pil_img, box, label):
         st.warning(f"🛑 Vision OCR error for '{label}': {e}")
         return "", 0.0
 
-# 🧠 Document AI Wrapper
+# 🧠 Document AI processor
 def parse_docai(pil_img, project_id, processor_id, location):
     try:
         client = documentai.DocumentProcessorServiceClient(
@@ -133,17 +129,16 @@ def parse_docai(pil_img, project_id, processor_id, location):
         st.error(f"📛 Document AI error: {e}")
         return None
 
-# 📄 Anchor Text Resolver
+# 📄 Anchor text resolver
 def extract_text_from_anchor(anchor, full_text):
-    if not anchor or not anchor.text_segments:
-        return ""
+    if not anchor or not anchor.text_segments: return ""
     return "".join([
         full_text[int(seg.start_index):int(seg.end_index)]
         for seg in anchor.text_segments
         if seg.start_index is not None and seg.end_index is not None
     ]).strip()
 
-# 🧭 LayoutManager
+# 🧭 LayoutManager class
 class LayoutManager:
     def __init__(self, image_size):
         self.image_size = image_size
@@ -159,11 +154,11 @@ class LayoutManager:
 
     def save_layout(self, layout_dict):
         return {label: self.to_normalized(box) for label, box in layout_dict.items()}
-# 🚀 Streamlit Page Setup
+# 🚀 Streamlit App Setup
 st.set_page_config(page_title="📜 Registry Parser", layout="wide")
-st.title("📜 Greek Registry Parser — Master & Detail Tables")
+st.title("📜 Greek Registry Parser — Master & Detail Mapping")
 
-# 🎯 Metadata Field Definitions
+# 🎯 Metadata Fields
 master_field_labels = [
     "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ",
     "ΕΠΩΝΥΜΟΝ",
@@ -172,7 +167,7 @@ master_field_labels = [
     "ΚΥΡΙΟΝ ΟΝΟΜΑ"
 ]
 
-# 📦 Main Containers
+# 📦 Data Containers
 metadata_rows = []
 detail_rows = []
 box_layouts = {}
@@ -181,35 +176,35 @@ box_layouts = {}
 st.sidebar.header("⚙️ Parser Settings")
 overlap = st.sidebar.slider("🔁 Zone Overlap (px)", 0, 120, value=40)
 
-# 🔐 GCP Credentials Uploader
+# 🔐 GCP Credential Upload
 cred_file = st.sidebar.file_uploader("🔐 Upload Google Credentials (.json)", type=["json"])
 if cred_file:
     with open("credentials.json", "wb") as f:
         f.write(cred_file.read())
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
-    st.sidebar.success("✅ Credentials loaded")
+    st.sidebar.success("✅ GCP credentials loaded")
 
-    # 📍 Restored Document AI Configuration Block ✅
+    # 📍 Restored Document AI Configuration
     project_id = "heroic-gantry-380919"
     processor_id = "8f7f56e900fbb37e"
     location = "eu"
 
-# 📥 Optional Layout Import
+# 📥 Optional Box Layout Import
 layout_file = st.sidebar.file_uploader("📥 Import Box Layouts (.json)", type=["json"])
 if layout_file:
     try:
         box_layouts = json.load(layout_file)
         st.sidebar.success(f"📦 Loaded layouts for {len(box_layouts)} zones")
     except Exception as e:
-        st.sidebar.error(f"❌ Layout loading error: {e}")
+        st.sidebar.error(f"❌ Layout import error: {e}")
 
-# 🖼️ Registry Scan Upload
-uploaded_image = st.file_uploader("📄 Upload Registry Page", type=["jpg", "jpeg", "png"])
+# 🖼️ Registry Page Upload
+uploaded_image = st.file_uploader("📄 Upload Registry Scan", type=["jpg", "jpeg", "png"])
 if not uploaded_image:
-    st.info("📎 Please upload a registry scan to continue.")
+    st.info("📎 Upload a registry page to begin.")
     st.stop()
 
-# ✂️ Preprocess Image
+# ✂️ Image Preprocessing & Zone Cropping
 try:
     original = Image.open(uploaded_image)
     cropped = crop_left(trim_whitespace(original))
@@ -218,21 +213,21 @@ try:
         st.error("🚫 Zone segmentation failed.")
         st.stop()
 except Exception as e:
-    st.error(f"❌ Error while preprocessing image: {e}")
+    st.error(f"❌ Error during image preprocessing: {e}")
     st.stop()
 
-# 📐 Initialize LayoutManagers Per Zone
+# 📐 LayoutManager Initialization per Zone
 layout_managers = {
     str(i + 1): LayoutManager(zones[i].size)
     for i in range(len(zones))
 }
 
-# 👀 Display Cropped and Segmented Image
+# 👀 Preview Cropped Image & Zones
 st.image(cropped, caption="📌 Cropped Registry Page (Left Side)", use_column_width=True)
 st.header("🗂️ Zone Previews")
 for i, zone in enumerate(zones, start=1):
     st.image(zone, caption=f"Zone {i}", width=300)
-# 🔁 Loop over zones and extract data
+# 🔁 Loop through all zones
 for idx, zone in enumerate(zones, start=1):
     zid = str(idx)
     manager = layout_managers[zid]
@@ -247,16 +242,48 @@ for idx, zone in enumerate(zones, start=1):
             "ΟΝΟΜΑ ΜΗΤΡΟΣ":    (0.05, 0.35, 0.40, 0.07),
             "ΚΥΡΙΟΝ ΟΝΟΜΑ":    (0.05, 0.45, 0.40, 0.07)
         }
-        st.warning("⚠️ Fallback layout applied")
 
+    # 📐 Bounding box editor
     layout_pixels = manager.load_layout(box_layouts[zid])
+    editor_rows = []
+    for label in master_field_labels:
+        box = layout_pixels.get(label)
+        x, y, w, h = box if box else (None, None, None, None)
+        editor_rows.append({"Label": label, "X": x, "Y": y, "Width": w, "Height": h})
+
+    editor_df = st.data_editor(
+        pd.DataFrame(editor_rows),
+        use_container_width=True,
+        num_rows="dynamic",
+        key=f"editor_{zid}"
+    )
+
+    # 💾 Save layout changes
+    edited_layout = {
+        row["Label"]: (row["X"], row["Y"], row["Width"], row["Height"])
+        for _, row in editor_df.iterrows()
+        if all(v is not None for v in (row["X"], row["Y"], row["Width"], row["Height"]))
+    }
+    box_layouts[zid] = manager.save_layout(edited_layout)
+
+    # 🖼️ Preview bounding boxes
+    overlay = zone.copy()
+    draw = ImageDraw.Draw(overlay)
+    for label, box in box_layouts[zid].items():
+        try:
+            x, y, w, h = manager.to_pixel(box)
+            x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
+            draw.rectangle([(x1, y1), (x2, y2)], outline="green", width=2)
+            draw.text((x1, y1 - 14), label, fill="green")
+        except: pass
+    st.image(overlay, caption="📌 Master Field Boxes", use_column_width=True)
 
     # 🧠 Document AI OCR
     doc = parse_docai(zone.copy(), project_id, processor_id, location)
     full_text = doc.text if doc else ""
     field_map = {label: {"Corrected": "", "Confidence": 0.0, "Issues": [], "Suggestion": None} for label in master_field_labels}
 
-    # 🔍 Extract fields via Document AI
+    # 🔍 Document AI: Metadata extraction
     if doc:
         for page in doc.pages:
             for f in page.form_fields:
@@ -275,13 +302,13 @@ for idx, zone in enumerate(zones, start=1):
                         "Suggestion": suggestion
                     }
 
-    # 🩹 Fill missing via Vision OCR
+    # 🩹 Vision OCR fallback
     for label in master_field_labels:
         if not field_map[label]["Corrected"]:
             box = box_layouts[zid].get(label)
             if box:
-                value_raw, conf = extract_field_from_box_with_vision(zone, box, label)
-                corrected = normalize(value_raw)
+                raw, conf = extract_field_from_box_with_vision(zone, box, label)
+                corrected = normalize(raw)
                 issues = validate_registry_field(label, corrected, conf)
                 suggestion = suggest_fix(label, corrected, issues)
                 field_map[label] = {
@@ -291,109 +318,105 @@ for idx, zone in enumerate(zones, start=1):
                     "Suggestion": suggestion
                 }
 
-    # 🆔 Use ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ as FormID
+    # 🆔 Assign FormID from ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ
     form_id = field_map["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"]["Corrected"] or f"ZONE_{zid}"
     st.markdown(f"🆔 FormID: `{form_id}`")
 
-    # ✅ Save Metadata
+    # ✅ Store metadata row
     metadata_rows.append({
         "FormID": form_id,
         **{label: field_map[label]["Corrected"] for label in master_field_labels if label != "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"}
     })
 
-    # 📊 Parse Detail Table (first 6 columns)
+    # 📊 Registry Detail Table Headers (multiline-aware)
+    expected_columns = [
+        "Α/Α",
+        "ΤΟΜΟΣ",
+        "ΑΡΙΘ.",
+        "ΗΜΕΡΟΜΗΝΙΑ ΜΕΤΑΓΡΑΦΗΣ",
+        "ΑΡΙΘ. ΕΓΓΡΑΦΟΥ\nΚΑΙ ΕΤΟΣ ΑΥΤΟΥ",
+        "ΣΥΜΒΟΛΑΙΟΓΡΑΦΟΣ\nΉ Η ΕΚΔΟΥΣΑ ΑΡΧΗ"
+    ]
+
+    def match_column_label(text):
+        norm = normalize(text.replace("\n", " ").strip())
+        for expected in expected_columns:
+            norm_expected = normalize(expected.replace("\n", " ").strip())
+            if norm_expected in norm or norm in norm_expected:
+                return expected
+        return None
+
+    # 🗂️ Extract table rows
     if doc:
         for page in doc.pages:
             for table in page.tables:
                 headers = []
                 for header_row in table.header_rows:
-                    for cell in header_row.cells[:6]:
+                    for cell in header_row.cells:
                         raw = extract_text_from_anchor(cell.layout.text_anchor, full_text)
-                        headers.append(normalize(raw) or f"COL_{len(headers)}")
+                        matched = match_column_label(raw)
+                        if matched and matched not in headers:
+                            headers.append(matched)
+                        if len(headers) == 6:
+                            break
 
                 st.markdown(f"📑 Registry Table — Columns: `{', '.join(headers)}`")
 
                 for row in table.body_rows:
                     row_data = {"FormID": form_id}
-                    for i in range(min(6, len(row.cells))):
-                        cell = row.cells[i]
+                    for i in range(6):
                         key = headers[i] if i < len(headers) else f"COL_{i}"
-                        value = extract_text_from_anchor(cell.layout.text_anchor, full_text)
-                        if "ΗΜΕΡ" in key:
-                            value = normalize_date(value)
-                        row_data[key] = normalize(value)
+                        if i < len(row.cells):
+                            cell = row.cells[i]
+                            value = extract_text_from_anchor(cell.layout.text_anchor, full_text)
+                            if "ΗΜΕΡ" in key:
+                                value = normalize_date(value)
+                            row_data[key] = normalize(value)
+                        else:
+                            row_data[key] = ""
                     detail_rows.append(row_data)
-# 🧠 Review Metadata Forms
-st.header("📊 Master Metadata Review & Final Corrections")
+# 🧠 Metadata Review
+st.header("📊 Metadata Review & Final Corrections")
 auto_apply = st.checkbox("💡 Auto-apply Suggestions", value=False)
 
-metadata_final = []
+final_metadata = []
 for row in metadata_rows:
     fid = row["FormID"]
     st.subheader(f"📄 FormID: {fid}")
     corrected_row = {"FormID": fid}
-
     for label in master_field_labels:
         if label == "ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ":
             continue  # Already stored as FormID
-        value = row.get(label, "")
-        default = value
+        val = row.get(label, "")
+        default = val
         final = st.text_input(f"{label}", value=default, key=f"{fid}_{label}")
         corrected_row[label] = final
+    final_metadata.append(corrected_row)
 
-    metadata_final.append(corrected_row)
-
-# 📤 Export Master Table
-st.header("📤 Export Metadata (Master Table)")
-df_master = pd.DataFrame(metadata_final)
+# 📤 Master Metadata Export
+st.header("📤 Export Master Metadata")
+df_master = pd.DataFrame(final_metadata)
 st.dataframe(df_master, use_container_width=True)
 
-st.download_button(
-    label="📄 Download Metadata CSV",
-    data=df_master.to_csv(index=False),
-    file_name="metadata_master.csv",
-    mime="text/csv"
-)
+st.download_button("📄 Download Metadata CSV", df_master.to_csv(index=False), "metadata_master.csv", mime="text/csv")
+st.download_button("📄 Download Metadata JSON", json.dumps(final_metadata, indent=2, ensure_ascii=False), "metadata_master.json", mime="application/json")
 
-st.download_button(
-    label="📄 Download Metadata JSON",
-    data=json.dumps(metadata_final, indent=2, ensure_ascii=False),
-    file_name="metadata_master.json",
-    mime="application/json"
-)
-
-# 🧾 Registry Detail Table
-st.header("📤 Export Registry Table Rows")
+# 🗂️ Registry Table Export
+st.header("📤 Export Registry Detail Table")
 df_detail = pd.DataFrame(detail_rows)
 st.dataframe(df_detail, use_container_width=True)
 
-st.download_button(
-    label="📄 Download Registry Table CSV",
-    data=df_detail.to_csv(index=False),
-    file_name="registry_table_rows.csv",
-    mime="text/csv"
-)
+st.download_button("📄 Download Registry Table CSV", df_detail.to_csv(index=False), "registry_table.csv", mime="text/csv")
+st.download_button("📄 Download Registry Table JSON", json.dumps(detail_rows, indent=2, ensure_ascii=False), "registry_table.json", mime="application/json")
 
-st.download_button(
-    label="📄 Download Registry Table JSON",
-    data=json.dumps(detail_rows, indent=2, ensure_ascii=False),
-    file_name="registry_table_rows.json",
-    mime="application/json"
-)
-
-# 📑 Table Schema
+# 📑 Schema Preview
 if not df_detail.empty:
     st.subheader("📑 Registry Table Schema")
     st.markdown(f"🧮 Columns: `{', '.join(df_detail.columns)}`")
-    st.download_button(
-        label="🧾 Download Schema JSON",
-        data=json.dumps(list(df_detail.columns), indent=2, ensure_ascii=False),
-        file_name="registry_table_schema.json",
-        mime="application/json"
-    )
+    st.download_button("🧾 Download Schema JSON", json.dumps(list(df_detail.columns), indent=2, ensure_ascii=False), "registry_table_schema.json", mime="application/json")
 
-# 💾 Layout Map Exports
-st.header("📦 Export Layout Maps")
+# 💾 Layout Export
+st.header("📦 Export Box Layouts")
 st.download_button(
     label="💾 Download Normalized Layouts",
     data=json.dumps(box_layouts, indent=2, ensure_ascii=False),
@@ -401,13 +424,13 @@ st.download_button(
     mime="application/json"
 )
 
-box_layout_absolute = {
+absolute_layouts = {
     zid: layout_managers[zid].load_layout(boxes)
     for zid, boxes in box_layouts.items()
 }
 st.download_button(
     label="💾 Download Absolute Layouts",
-    data=json.dumps(box_layout_absolute, indent=2, ensure_ascii=False),
+    data=json.dumps(absolute_layouts, indent=2, ensure_ascii=False),
     file_name="box_layouts_absolute.json",
     mime="application/json"
 )
