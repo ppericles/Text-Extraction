@@ -2,6 +2,9 @@
 
 import streamlit as st
 from PIL import Image
+import os
+import tempfile
+
 from components.image_cropper import crop_and_confirm_forms
 from utils_image import (
     trim_whitespace,
@@ -23,9 +26,24 @@ from utils_mock import (
 from utils_ocr import parse_zone_text
 from utils_text import preview_metadata_row
 
+# ==== Page Setup ====
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
 st.title("📄 Registry Form Parser")
 
+# ==== Credential Upload ====
+st.sidebar.markdown("### 🔐 Load Google Credentials")
+cred_file = st.sidebar.file_uploader("Upload JSON credentials", type=["json"])
+
+if cred_file:
+    temp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+    temp_path.write(cred_file.read())
+    temp_path.close()
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_path.name
+    st.sidebar.success("✅ Credentials loaded successfully.")
+else:
+    st.sidebar.warning("⚠️ Upload service account JSON to enable OCR.")
+
+# ==== File Upload ====
 uploaded_files = st.file_uploader(
     "📤 Upload Registry Scans with Multiple Forms Per Image",
     type=["png", "jpg", "jpeg"],
@@ -37,6 +55,7 @@ default_templates = {
     "2": "templates/layout_zone_2.json"
 }
 
+# ==== Main Processing ====
 if uploaded_files:
     for file in uploaded_files:
         base_name = file.name.replace(".", "_")
@@ -51,8 +70,7 @@ if uploaded_files:
 
             # Preprocessing
             clean = trim_whitespace(img)
-            # aligned = deskew_image(clean)
-            aligned = clean  # skip deskewing for now
+            aligned = deskew_image(clean)
             zones, bounds = split_zones_fixed(aligned)
             preview = draw_zones_overlays(aligned, bounds)
             st.image(resize_for_preview(preview), caption=f"📐 Zones for `{form_id}`", use_column_width=True)
@@ -84,7 +102,10 @@ if uploaded_files:
 
             for zid in ["1", "2", "3"]:
                 zone_img = zones[int(zid) - 1]
-                zone_ocr = parse_zone_text(zone_img, engine="vision")
+                if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
+                    zone_ocr = parse_zone_text(zone_img, engine="vision")
+                else:
+                    zone_ocr = "⚠️ OCR skipped — no credentials loaded."
                 trace.append(zone_ocr)
 
             ocr_traces[form_id] = trace
