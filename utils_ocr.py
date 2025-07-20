@@ -1,121 +1,47 @@
-# ==== utils_ocr.py ====
+# ==== FILE: utils_ocr.py ====
 
-from io import BytesIO
 from google.cloud import vision
-from google.api_core.exceptions import ServiceUnavailable
+from google.cloud import documentai_v1beta3 as documentai
 from PIL import Image
-import time
+from io import BytesIO
+import numpy as np
 
-def run_vision_ocr(image, max_retries=3):
+def parse_zone_text(image, engine="vision"):
     """
-    Runs OCR using Google Cloud Vision API with retry logic.
-
-    Args:
-        image (PIL.Image): Zone image
-        max_retries (int): Number of retry attempts on failure
-
-    Returns:
-        vision.AnnotateImageResponse or str: OCR response or error message
+    Extracts raw text from a zone image using Google Vision OCR.
     """
-    client = vision.ImageAnnotatorClient()
-
-    print(f"[OCR] Image type: {type(image)}")
-    if not isinstance(image, Image.Image):
-        return "❌ Invalid image object — must be a PIL.Image"
-
-    try:
+    if engine == "vision":
+        client = vision.ImageAnnotatorClient()
         image_bytes = BytesIO()
         image.save(image_bytes, format="PNG")
         content = image_bytes.getvalue()
-    except Exception as e:
-        return f"❌ Failed to convert image to bytes: {str(e)}"
-
-    for attempt in range(max_retries):
-        try:
-            response = client.document_text_detection(image=vision.Image(content=content))
-            return response
-        except ServiceUnavailable:
-            time.sleep(2 ** attempt)
-        except Exception as e:
-            return f"❌ OCR error: {str(e)}"
-
-    return "❌ OCR failed after multiple retries."
-
-def run_ocr(image, engine="vision", **kwargs):
-    """
-    Dispatches OCR to the selected engine.
-
-    Args:
-        image (PIL.Image): Zone image
-        engine (str): OCR engine name
-
-    Returns:
-        OCR result or error message
-    """
-    if engine == "vision":
-        return run_vision_ocr(image, **kwargs)
+        image_obj = vision.Image(content=content)
+        response = client.document_text_detection(image=image_obj)
+        return response.full_text_annotation.text
     else:
-        return f"⚠️ Unsupported OCR engine: {engine}"
+        return "⚠️ Unknown OCR engine."
 
-def parse_zone_text(image, engine="vision", **kwargs):
+def form_parser_ocr(image: Image.Image, project_id: str, location: str, processor_id: str) -> dict:
     """
-    Parses text from a zone image using OCR.
-
-    Args:
-        image (PIL.Image): Zone image
-        engine (str): OCR engine name
-
-    Returns:
-        str: Extracted text or error message
+    Sends a PIL image to Google Document AI Form Parser and returns extracted key-value pairs with confidence scores.
     """
-    ocr_results = run_ocr(image, engine=engine, **kwargs)
+    client = documentai.DocumentProcessorServiceClient()
+    name = f"projects/{project_id}/locations/{location}/processors/{processor_id}"
 
-    if isinstance(ocr_results, str):
-        return ocr_results  # Error message
+    image_bytes = BytesIO()
+    image.save(image_bytes, format="PNG")
 
-    try:
-        return ocr_results.full_text_annotation.text
-    except AttributeError:
-        return "⚠️ No text found in OCR response."
+    raw_document = documentai.RawDocument(content=image_bytes.getvalue(), mime_type="image/png")
+    request = documentai.ProcessRequest(name=name, raw_document=raw_document)
+    result = client.process_document(request=request)
 
-def extract_fields_from_layout(zone_img, layout_dict, engine="vision", **kwargs):
-    """
-    Extracts text from each field box defined in the layout, with debug checks.
-
-    Args:
-        zone_img (PIL.Image): Zone image
-        layout_dict (dict): {label: [x1, y1, x2, y2]} in normalized coords
-        engine (str): OCR engine name
-
-    Returns:
-        dict: {label: extracted_text}
-    """
-    assert isinstance(zone_img, Image.Image), "❌ zone_img must be a PIL.Image"
-
-    w, h = zone_img.size
-    results = {}
-
-    for label, box in layout_dict.items():
-        x1, y1, x2, y2 = [int(coord * dim) for coord, dim in zip(box, [w, h, w, h])]
-
-        # 🧪 Diagnostic printout
-        print(f"[{label}] Crop box: ({x1}, {y1}, {x2}, {y2}) — Image size: ({w}, {h})")
-
-        # 🚨 Sanity check
-        if x2 <= x1 or y2 <= y1 or x1 < 0 or y1 < 0 or x2 > w or y2 > h:
-            print(f"❌ Invalid crop box for '{label}' — skipping")
-            results[label] = "⚠️ Invalid box"
-            continue
-
-        try:
-            field_crop = zone_img.crop((x1, y1, x2, y2))
-            field_text = parse_zone_text(field_crop, engine=engine, **kwargs)
-            results[label] = field_text.strip() if isinstance(field_text, str) else "⚠️ No text found"
-        except Exception as e:
-            print(f"❌ Error extracting '{label}': {str(e)}")
-            results[label] = f"❌ Extraction error: {str(e)}"
-
-    return results
+    fields = {}
+    for entity in result.document.entities:
+        key = entity.type_.strip()
+        value = entity.mention_text.strip()
+        confidence = round(entity.confidence * 100)  # Convert to percentage
+        fields[key] = {"value": value, "confidence": confidence}
+    return fields
 
 def match_fields_with_fallback(expected_keys, extracted_fields, image, layout_dict):
     """
@@ -135,7 +61,28 @@ def match_fields_with_fallback(expected_keys, extracted_fields, image, layout_di
                 w, h = image.size
                 x1, y1, x2, y2 = [int(coord * dim) for coord, dim in zip(box, [w, h, w, h])]
                 cropped = image.crop((x1, y1, x2, y2))
-                matched[expected] = parse_zone_text(cropped, engine="vision").strip()
+                text = parse_zone_text(cropped, engine="vision").strip()
+                matched[expected] = {"value": text, "confidence": 0}
             else:
-                matched[expected] = "❌ Not found"
+                matched[expected] = {"value": "❌ Not found", "confidence": 0}
     return matched
+
+def extract_fields_from_layout(image, layout_dict, engine="vision"):
+    """
+    Extracts field-level text from image using layout boxes.
+    """
+    client = vision.ImageAnnotatorClient()
+    w, h = image.size
+    fields = {}
+
+    for label, box in layout_dict.items():
+        x1, y1, x2, y2 = [int(coord * dim) for coord, dim in zip(box, [w, h, w, h])]
+        cropped = image.crop((x1, y1, x2, y2))
+        image_bytes = BytesIO()
+        cropped.save(image_bytes, format="PNG")
+        content = image_bytes.getvalue()
+        image_obj = vision.Image(content=content)
+        response = client.document_text_detection(image=image_obj)
+        text = response.full_text_annotation.text.strip()
+        fields[label] = text
+    return fields
