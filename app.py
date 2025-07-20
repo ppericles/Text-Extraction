@@ -51,7 +51,8 @@ if uploaded_files:
 
             # Preprocessing
             clean = trim_whitespace(img)
-            aligned = deskew_image(clean)
+            # aligned = deskew_image(clean)
+            aligned = clean  # skip deskewing for now
             zones, bounds = split_zones_fixed(aligned)
             preview = draw_zones_overlays(aligned, bounds)
             st.image(resize_for_preview(preview), caption=f"📐 Zones for `{form_id}`", use_column_width=True)
