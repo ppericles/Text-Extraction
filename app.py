@@ -1,6 +1,6 @@
-# ==== FILE: app.py (Part 1) ====
-# Version: 2.0.0
-# Author: Pericles & Copilot
+# FILE: app.py (Part 1 of 2)
+# Version: 2.1.0
+# Description: Registry Parser — with interactive canvas for drawing AND editing bounding boxes
 
 import streamlit as st
 from PIL import Image, ImageDraw
@@ -94,27 +94,28 @@ def process_single_form(image, box, index, config, layout):
         "column_breaks": column_breaks,
         "table_rows": table_rows
     }
-    # ==== UI: Streamlit Sidebar and Main App ====
+   # ==== Streamlit UI ====
 
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
 st.title("📄 Registry Form Parser")
 
-# ==== Credential Config ====
+# === Load or Create Config ===
 CONFIG_PATH = "config/processor_config.json"
 os.makedirs("config", exist_ok=True)
 default_config = {"project_id": "", "location": "", "processor_id": ""}
 if os.path.exists(CONFIG_PATH):
     default_config = json.load(open(CONFIG_PATH))
 
+# === Sidebar Configuration ===
 st.sidebar.markdown("### 🔐 Credentials")
 cred_file = st.sidebar.file_uploader("Upload Google JSON", type="json")
 if cred_file:
     temp_path = tempfile.NamedTemporaryFile(delete=False)
     temp_path.write(cred_file.read()), temp_path.close()
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_path.name
-    st.sidebar.success("✅ Loaded")
+    st.sidebar.success("✅ Credentials Loaded")
 
-st.sidebar.markdown("### ⚙️ Document AI Config")
+st.sidebar.markdown("### ⚙️ Document AI")
 project_id = st.sidebar.text_input("Project ID", value=default_config["project_id"])
 location = st.sidebar.text_input("Location", value=default_config["location"])
 processor_id = st.sidebar.text_input("Processor ID", value=default_config["processor_id"])
@@ -127,7 +128,7 @@ if st.sidebar.button("💾 Save Config"):
     }, open(CONFIG_PATH, "w"))
     st.sidebar.success("✅ Saved")
 
-# ==== File Upload ====
+# === File Upload ===
 uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
 if uploaded_files and all([project_id, location, processor_id]):
@@ -135,10 +136,15 @@ if uploaded_files and all([project_id, location, processor_id]):
 
     for file in uploaded_files:
         st.header(f"📄 `{file.name}`")
+
         image = trim_whitespace(optimize_image(Image.open(file)))
         st.image(resize_for_preview(image), caption="📄 Full Image", use_column_width=True)
 
-        st.markdown("## ✏️ Draw Form Boxes")
+        st.markdown("### ✏️ Bounding Box Editor")
+
+        canvas_mode = st.radio("Canvas Mode", ["Draw", "Edit"], horizontal=True)
+        drawing_mode = "rect" if canvas_mode == "Draw" else "transform"
+
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)",
             stroke_width=2,
@@ -146,7 +152,7 @@ if uploaded_files and all([project_id, location, processor_id]):
             update_streamlit=True,
             height=image.height,
             width=image.width,
-            drawing_mode="rect",
+            drawing_mode=drawing_mode,
             key=f"canvas_{file.name}"
         )
 
@@ -186,15 +192,16 @@ if uploaded_files and all([project_id, location, processor_id]):
 
             st.image(resize_for_preview(result["master"]), caption="🟦 Master Zone", use_column_width=True)
 
-            preview = result["detail"].copy()
-            draw = ImageDraw.Draw(preview)
-            w, h = preview.size
+            # Column overlay
+            overlay = result["detail"].copy()
+            draw = ImageDraw.Draw(overlay)
+            w, h = overlay.size
             for x1, _ in result["column_breaks"]:
                 x = int(x1 * w)
                 draw.line([(x, 0), (x, h)], fill="red", width=2)
-            st.image(resize_for_preview(preview), caption="📐 Table Column Breaks", use_column_width=True)
+            st.image(resize_for_preview(overlay), caption="📐 Table Column Breaks", use_column_width=True)
 
-            st.markdown("### 🧾 Group A")
+            st.markdown("### 🧾 Group A (ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ)")
             for label, data in result["group_a"].items():
                 emoji = "🟢" if data["confidence"] >= 90 else "🟡" if data["confidence"] >= 70 else "🔴"
                 st.text(f"{emoji} {label}: {data['value']} ({data['confidence']}%)")
@@ -208,4 +215,4 @@ if uploaded_files and all([project_id, location, processor_id]):
             if result["table_rows"]:
                 st.dataframe(result["table_rows"], use_container_width=True)
             else:
-                st.warning("⚠️ No table rows extracted.")
+                st.warning("⚠️ No table rows extracted.") 
