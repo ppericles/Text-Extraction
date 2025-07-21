@@ -1,5 +1,5 @@
 # ==== FILE: utils_ocr.py - OCR Extraction and Field Matching Logic ====
-# Version: 1.0.0
+# Version: 1.1.0
 # Created: 2025-07-21
 # Author: Pericles & Copilot
 # Description: Handles Document AI and Vision OCR, and matches extracted text to expected fields with type-aware validation.
@@ -14,7 +14,7 @@ def form_parser_ocr(image, project_id, location, processor_id):
     """
     Sends image to Document AI Form Parser and returns extracted fields.
     """
-    client = documentai.DocumentUnderstandingServiceClient()
+    client = documentai.DocumentProcessorServiceClient()
     name = f"projects/{project_id}/locations/{location}/processors/{processor_id}"
 
     img_byte_arr = io.BytesIO()
