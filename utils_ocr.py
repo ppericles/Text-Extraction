@@ -1,11 +1,11 @@
 # ==== FILE: utils_ocr.py - OCR Extraction and Field Matching Logic ====
-# Version: 1.2.0
+# Version: 1.3.0
 # Created: 2025-07-21
 # Author: Pericles & Copilot
-# Description: Handles Document AI and Vision OCR, and matches extracted text to expected fields with type-aware validation.
+# Description: Uses Document AI v1 and Vision API to extract structured fields from registry scans.
 
-from google.cloud.documentai_v1beta3 import DocumentProcessorServiceClient
-from google.cloud.documentai_v1beta3.types import RawDocument, ProcessRequest
+from google.cloud.documentai_v1 import DocumentProcessorServiceClient
+from google.cloud.documentai_v1.types import RawDocument, ProcessRequest
 from google.cloud import vision
 from PIL import Image
 import io
@@ -13,7 +13,7 @@ import re
 
 def form_parser_ocr(image, project_id, location, processor_id):
     """
-    Sends image to Document AI Form Parser and returns extracted fields.
+    Sends image to Document AI Form Parser (v1) and returns extracted fields.
     """
     client = DocumentProcessorServiceClient()
     name = f"projects/{project_id}/locations/{location}/processors/{processor_id}"
