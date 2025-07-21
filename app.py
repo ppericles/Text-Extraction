@@ -6,7 +6,6 @@
 
 import streamlit as st
 from PIL import Image
-import io
 import os
 import json
 import tempfile
@@ -78,12 +77,20 @@ if uploaded_files and project_id and location and processor_id:
         image = Image.open(file)
         clean = trim_whitespace(image)
 
-        # ==== Canvas Safety Guard ====
+        # ==== Canvas Safety Guard & Diagnostics ====
+        st.write("🧪 Image diagnostics:")
+        st.write(f"Mode: {clean.mode}")
+        st.write(f"Size: {clean.size}")
+        st.write(f"Type: {type(clean)}")
+
         if not isinstance(clean, Image.Image):
-            st.error("🧯 Invalid image format — expected a PIL.Image.")
+            st.error("❌ `clean` is not a PIL.Image — canvas cannot load.")
             st.stop()
         if clean.mode != "RGB":
             clean = clean.convert("RGB")
+        if clean.size[0] == 0 or clean.size[1] == 0:
+            st.error("❌ Image size is invalid (0 width or height).")
+            st.stop()
 
         # ==== Zone Splitting ====
         split_ratio = st.slider("📐 Vertical split ratio for master zone", 0.2, 0.8, value=0.3, step=0.01, key=f"split_{base_name}")
@@ -111,9 +118,9 @@ if uploaded_files and project_id and location and processor_id:
         st.markdown("### ✏️ Draw Field Zones")
         try:
             canvas_result = st_canvas(
+                background_image=clean,
                 fill_color="rgba(0, 0, 255, 0.2)",
                 stroke_width=3,
-                background_image=clean,
                 update_streamlit=True,
                 height=clean.height,
                 width=clean.width,
