@@ -1,5 +1,5 @@
 # ==== FILE: app.py - Streamlit UI for Registry Form Parser ====
-# Version: 1.1.0
+# Version: 1.2.0
 # Created: 2025-07-21
 # Author: Pericles & Copilot
 # Description: Handles UI, file uploads, OCR pipeline, layout editing, and result display.
@@ -94,9 +94,14 @@ if uploaded_files and project_id and location and processor_id:
             st.error("❌ Image size is invalid (0 width or height).")
             st.stop()
 
+        # ==== Temp File Workaround ====
+        temp_png = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        clean.save(temp_png.name)
+        reloaded = Image.open(temp_png.name).convert("RGB")
+
         # ==== Zone Splitting ====
         split_ratio = st.slider("📐 Vertical split ratio for master zone", 0.2, 0.8, value=0.3, step=0.01, key=f"split_{base_name}")
-        zones, bounds = split_zones_fixed(clean, master_ratio=0.5)
+        zones, bounds = split_zones_fixed(reloaded, master_ratio=0.5)
         master_zone, detail_zone = zones
         master_bounds, detail_bounds = bounds
 
@@ -107,7 +112,7 @@ if uploaded_files and project_id and location and processor_id:
             "group_b": (master_bounds[0] + split_x, master_bounds[1], master_bounds[2], master_bounds[3]),
         }
 
-        overlay = draw_colored_zones(clean, master_bounds, detail_bounds, group_bounds)
+        overlay = draw_colored_zones(reloaded, master_bounds, detail_bounds, group_bounds)
         st.image(resize_for_preview(overlay), caption="📐 Zone Debug Overlay", use_column_width=True)
 
         group_a, group_b = split_master_zone_vertically(master_zone, split_ratio)
@@ -120,12 +125,12 @@ if uploaded_files and project_id and location and processor_id:
         st.markdown("### ✏️ Draw Field Zones")
         try:
             canvas_result = st_canvas(
-                background_image=clean,
+                background_image=reloaded,
                 fill_color="rgba(0, 0, 255, 0.2)",
                 stroke_width=3,
                 update_streamlit=True,
-                height=clean.height,
-                width=clean.width,
+                height=reloaded.height,
+                width=reloaded.width,
                 drawing_mode="rect",
                 key=f"canvas_{base_name}"
             )
@@ -138,10 +143,10 @@ if uploaded_files and project_id and location and processor_id:
         if canvas_result.json_data:
             for obj in canvas_result.json_data["objects"]:
                 label = obj.get("name", f"field_{len(layout_dict)}")
-                x1 = obj["left"] / clean.width
-                y1 = obj["top"] / clean.height
-                x2 = (obj["left"] + obj["width"]) / clean.width
-                y2 = (obj["top"] + obj["height"]) / clean.height
+                x1 = obj["left"] / reloaded.width
+                y1 = obj["top"] / reloaded.height
+                x2 = (obj["left"] + obj["width"]) / reloaded.width
+                y2 = (obj["top"] + obj["height"]) / reloaded.height
                 layout_dict[label] = [x1, y1, x2, y2]
 
         # ==== Sidebar Field Editor ====
