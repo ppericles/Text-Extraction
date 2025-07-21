@@ -1,8 +1,8 @@
 # ==== FILE: app.py - Streamlit UI for Registry Form Parser ====
-# Version: 1.2.0
+# Version: 1.3.0
 # Created: 2025-07-21
 # Author: Pericles & Copilot
-# Description: Handles UI, file uploads, OCR pipeline, layout editing, and result display.
+# Description: Handles UI, file uploads, OCR pipeline, layout editing, and result display. Canvas temporarily disabled.
 
 import streamlit as st
 from PIL import Image
@@ -10,7 +10,6 @@ import os
 import json
 import tempfile
 
-from streamlit_drawable_canvas import st_canvas
 from utils_ocr import form_parser_ocr, match_fields_with_fallback
 from utils_image import (
     optimize_image,
@@ -79,14 +78,14 @@ if uploaded_files and project_id and location and processor_id:
         image = optimize_image(image)
         clean = trim_whitespace(image)
 
-        # ==== Canvas Safety Guard & Diagnostics ====
+        # ==== Diagnostics ====
         st.write("🧪 Image diagnostics:")
         st.write(f"Mode: {clean.mode}")
         st.write(f"Size: {clean.size}")
         st.write(f"Type: {type(clean)}")
 
         if not isinstance(clean, Image.Image):
-            st.error("❌ `clean` is not a PIL.Image — canvas cannot load.")
+            st.error("❌ `clean` is not a PIL.Image — cannot proceed.")
             st.stop()
         if clean.mode != "RGB":
             clean = clean.convert("RGB")
@@ -94,14 +93,9 @@ if uploaded_files and project_id and location and processor_id:
             st.error("❌ Image size is invalid (0 width or height).")
             st.stop()
 
-        # ==== Temp File Workaround ====
-        temp_png = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        clean.save(temp_png.name)
-        reloaded = Image.open(temp_png.name).convert("RGB")
-
         # ==== Zone Splitting ====
         split_ratio = st.slider("📐 Vertical split ratio for master zone", 0.2, 0.8, value=0.3, step=0.01, key=f"split_{base_name}")
-        zones, bounds = split_zones_fixed(reloaded, master_ratio=0.5)
+        zones, bounds = split_zones_fixed(clean, master_ratio=0.5)
         master_zone, detail_zone = zones
         master_bounds, detail_bounds = bounds
 
@@ -112,7 +106,7 @@ if uploaded_files and project_id and location and processor_id:
             "group_b": (master_bounds[0] + split_x, master_bounds[1], master_bounds[2], master_bounds[3]),
         }
 
-        overlay = draw_colored_zones(reloaded, master_bounds, detail_bounds, group_bounds)
+        overlay = draw_colored_zones(clean, master_bounds, detail_bounds, group_bounds)
         st.image(resize_for_preview(overlay), caption="📐 Zone Debug Overlay", use_column_width=True)
 
         group_a, group_b = split_master_zone_vertically(master_zone, split_ratio)
@@ -121,60 +115,15 @@ if uploaded_files and project_id and location and processor_id:
         col1.image(resize_for_preview(group_a), caption="🟦 Group A: ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ", use_column_width=True)
         col2.image(resize_for_preview(group_b), caption="🟩 Group B: Other Fields", use_column_width=True)
 
-        # ==== Interactive Canvas ====
-        st.markdown("### ✏️ Draw Field Zones")
-        try:
-            canvas_result = st_canvas(
-                background_image=reloaded,
-                fill_color="rgba(0, 0, 255, 0.2)",
-                stroke_width=3,
-                update_streamlit=True,
-                height=reloaded.height,
-                width=reloaded.width,
-                drawing_mode="rect",
-                key=f"canvas_{base_name}"
-            )
-        except Exception as e:
-            st.error("🧯 Canvas failed to load. Please check the image format or reload the app.")
-            st.stop()
-
-        # ==== Convert Canvas to Layout ====
-        layout_dict = {}
-        if canvas_result.json_data:
-            for obj in canvas_result.json_data["objects"]:
-                label = obj.get("name", f"field_{len(layout_dict)}")
-                x1 = obj["left"] / reloaded.width
-                y1 = obj["top"] / reloaded.height
-                x2 = (obj["left"] + obj["width"]) / reloaded.width
-                y2 = (obj["top"] + obj["height"]) / reloaded.height
-                layout_dict[label] = [x1, y1, x2, y2]
-
-        # ==== Sidebar Field Editor ====
-        st.sidebar.markdown("### ✏️ Edit Field Zones")
-        edited_layout = {}
-        field_types = ["Name", "Parent Name", "ID", "Date", "Location", "Custom"]
-
-        for field_label, box_coords in layout_dict.items():
-            with st.sidebar.expander(f"🗂️ Zone: `{field_label}`", expanded=False):
-                new_label = st.text_input("Label", value=field_label, key=f"label_{field_label}")
-                selected_type = st.selectbox("Field Type", field_types, key=f"type_{field_label}")
-                edited_layout[new_label] = {
-                    "box": box_coords,
-                    "type": selected_type
-                }
-
-        if st.sidebar.button("💾 Save Edited Layout"):
-            save_path = f"exports/layout_versions/{base_name}_layout.json"
-            with open(save_path, "w") as f:
-                json.dump(edited_layout, f, indent=2)
-            st.sidebar.success("✅ Edited layout saved.")
+        # ==== Canvas Disabled Notice ====
+        st.warning("🛑 Canvas drawing temporarily disabled due to image format issues. Layout editing is paused.")
 
         # ==== OCR & Matching ====
         fields_a = form_parser_ocr(group_a, project_id, location, processor_id)
         fields_b = form_parser_ocr(group_b, project_id, location, processor_id)
 
-        matched_a = match_fields_with_fallback(expected_fields["group_a"], fields_a, group_a, edited_layout)
-        matched_b = match_fields_with_fallback(expected_fields["group_b"], fields_b, group_b, edited_layout)
+        matched_a = match_fields_with_fallback(expected_fields["group_a"], fields_a, group_a, {})
+        matched_b = match_fields_with_fallback(expected_fields["group_b"], fields_b, group_b, {})
 
         def show_results(title, matched_fields):
             st.markdown(f"### 🧾 {title}")
