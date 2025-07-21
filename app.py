@@ -1,5 +1,5 @@
 # ==== FILE: app.py - Streamlit UI for Registry Form Parser ====
-# Version: 1.0.0
+# Version: 1.1.0
 # Created: 2025-07-21
 # Author: Pericles & Copilot
 # Description: Handles UI, file uploads, OCR pipeline, layout editing, and result display.
@@ -13,6 +13,7 @@ import tempfile
 from streamlit_drawable_canvas import st_canvas
 from utils_ocr import form_parser_ocr, match_fields_with_fallback
 from utils_image import (
+    optimize_image,
     resize_for_preview,
     trim_whitespace,
     split_zones_fixed,
@@ -75,6 +76,7 @@ if uploaded_files and project_id and location and processor_id:
         st.header(f"📄 `{file.name}` — Parse & Extract")
 
         image = Image.open(file)
+        image = optimize_image(image)
         clean = trim_whitespace(image)
 
         # ==== Canvas Safety Guard & Diagnostics ====
