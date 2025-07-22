@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.7.13
+# VERSION: 3.7.14
 # DESCRIPTION: Streamlit-based Registry Form Parser with
 #              interactive canvas drawing, multi-profile
 #              config encryption, Google OCR (Vision API or
@@ -177,7 +177,7 @@ if uploaded_files:
         if file.name not in st.session_state.saved_boxes:
             st.session_state.saved_boxes[file.name] = []
         updated_boxes = []
-        if canvas_result.json_data:
+        if "canvas_result" in locals() and canvas_result and canvas_result.json_data:
             scale_x = processed.width / preview_img.width
             scale_y = processed.height / preview_img.height
             for obj in canvas_result.json_data["objects"]:
