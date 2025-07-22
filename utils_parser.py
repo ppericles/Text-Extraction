@@ -1,9 +1,10 @@
 # ============================================================
 # FILE: utils_parser.py
-# VERSION: 1.2
+# VERSION: 1.3
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Form-level parsing logic for registry scans.
 #              Accepts cropped form image directly.
+#              Supports Vision API and Document AI.
 # ============================================================
 
 from utils_ocr import form_parser_ocr, match_fields_with_fallback, vision_api_ocr
@@ -12,6 +13,7 @@ import cv2
 import numpy as np
 
 def suggest_column_breaks(pil_image, threshold=220, min_gap=15):
+    """Suggest column breaks based on vertical whitespace."""
     gray = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2GRAY)
     _, binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY_INV)
     profile = np.sum(binary, axis=0)
@@ -29,6 +31,7 @@ def suggest_column_breaks(pil_image, threshold=220, min_gap=15):
     return columns
 
 def extract_table(table_img, config, column_breaks, rows=10, header=True):
+    """Extract table rows from detail zone using column breaks."""
     w, h = table_img.size
     row_h = h / (rows + int(header))
     headers, data = [], []
@@ -48,6 +51,7 @@ def extract_table(table_img, config, column_breaks, rows=10, header=True):
     return headers, data
 
 def process_single_form(form_crop, index, config, layout):
+    """Process a single cropped form image."""
     zones, _ = split_zones_fixed(form_crop, layout.get("master_ratio", 0.5))
     master_zone, detail_zone = zones
 
@@ -63,8 +67,10 @@ def process_single_form(form_crop, index, config, layout):
 
     expected_a = ["ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ"]
     expected_b = ["ΕΠΩΝΥΜΟΝ", "ΟΝΟΜΑ ΠΑΤΡΟΣ", "ΟΝΟΜΑ ΜΗΤΡΟΣ", "ΚΥΡΙΟΝ ΟΝΟΜΑ"]
-    fields_a = form_parser_ocr(group_a, **config)
-    fields_b = form_parser_ocr(group_b, **config)
+
+    fields_a = form_parser_ocr(group_a, **config) if config.get("project_id") else []
+    fields_b = form_parser_ocr(group_b, **config) if config.get("project_id") else []
+
     matched_a = match_fields_with_fallback(expected_a, fields_a, group_a, layout)
     matched_b = match_fields_with_fallback(expected_b, fields_b, group_b, layout)
 
