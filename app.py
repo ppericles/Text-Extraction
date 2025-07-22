@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.7.3
+# VERSION: 3.7.4
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              bounding box selection, internal layout logic,
@@ -103,7 +103,6 @@ if selected_profile == "New Profile":
         else:
             st.sidebar.error("⚠️ Please fill in all fields before saving.")
 
-    # === Auto-Fill from Clipboard or File ===
     st.sidebar.markdown("### 📋 Auto-Fill Profile")
     pasted_json = st.sidebar.text_area("Paste JSON", height=100, key="profile_clipboard")
     if st.sidebar.button("📥 Load from Paste", key="load_from_clipboard"):
@@ -171,10 +170,11 @@ else:
         st.sidebar.success(f"🗑️ Profile `{selected_profile}` deleted.")
         st.experimental_rerun()
 
-# === File Upload ===
+# === Image Settings ===
 st.sidebar.markdown("### 🖼️ Image Settings")
 use_adaptive_trim = st.sidebar.checkbox("Use Adaptive Trimming", value=True)
 
+# === File Upload ===
 uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
 if "saved_boxes" not in st.session_state:
@@ -185,8 +185,9 @@ if uploaded_files:
     for file in uploaded_files:
         st.header(f"📄 `{file.name}` — Select Forms")
 
-        image = Image.open(file).convert("RGB")
-        preview_img = resize_for_preview(image)
+        image_raw = Image.open(file).convert("RGB")
+        processed = adaptive_trim_whitespace(image_raw.copy()) if use_adaptive_trim else trim_whitespace(image_raw.copy())
+        preview_img = resize_for_preview(processed)
 
         st.image(preview_img, caption="Preview Image", use_column_width=True)
 
@@ -201,8 +202,6 @@ if uploaded_files:
             drawing_mode="rect",
             key=f"canvas_{file.name}"
         )
-
-        processed = adaptive_trim_whitespace(image.copy()) if use_adaptive_trim else trim_whitespace(image.copy())
 
         form_boxes = []
         if canvas_result.json_data:
@@ -316,8 +315,8 @@ if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
     st.session_state.parsed_forms = {}
 
     for file in uploaded_files:
-        image = Image.open(file).convert("RGB")
-        processed = adaptive_trim_whitespace(image.copy()) if use_adaptive_trim else trim_whitespace(image.copy())
+        image_raw = Image.open(file).convert("RGB")
+        processed = adaptive_trim_whitespace(image_raw.copy()) if use_adaptive_trim else trim_whitespace(image_raw.copy())
         form_boxes = st.session_state.saved_boxes.get(file.name, [])
         parsed_results = []
 
