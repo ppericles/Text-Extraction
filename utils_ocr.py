@@ -1,27 +1,29 @@
 # FILE: utils_ocr.py
-# Description: OCR utilities with improved error handling
-# Version: 1.1
+# Description: OCR utilities for registry parser
+# Version: 1.2
 
 import io
 from PIL import Image
 from google.cloud import documentai_v1 as documentai
+from google.cloud import vision
 from google.api_core.exceptions import GoogleAPIError
 
+# === Helper: Convert image to bytes ===
 def image_to_bytes(img: Image.Image) -> bytes:
-    # Convert image to bytes (force RGB for compatibility)
     if img.mode != "RGB":
         img = img.convert("RGB")
     buffer = io.BytesIO()
     img.save(buffer, format="PNG")
     return buffer.getvalue()
 
+# === Primary OCR via Document AI ===
 def form_parser_ocr(img: Image.Image, project_id: str, location: str, processor_id: str) -> dict:
     try:
         if not all([project_id, location, processor_id]):
-            raise ValueError("Missing Document AI configuration (project_id, location, processor_id)")
+            raise ValueError("Missing Document AI configuration.")
 
         client = documentai.DocumentProcessorServiceClient()
-        name = client.processor_path(project_id, location, processor_id)
+        processor_path = client.processor_path(project_id, location, processor_id)
 
         image_bytes = image_to_bytes(img)
 
@@ -31,7 +33,7 @@ def form_parser_ocr(img: Image.Image, project_id: str, location: str, processor_
         )
 
         request = documentai.ProcessRequest(
-            name=name,
+            name=processor_path,
             raw_document=raw_document
         )
 
@@ -53,5 +55,33 @@ def form_parser_ocr(img: Image.Image, project_id: str, location: str, processor_
         return {}
 
     except Exception as e:
-        print(f"[Document AI] Processing failed: {e}")
+        print(f"[Document AI] Unexpected error: {e}")
         return {}
+
+# === Fallback OCR via Vision API ===
+def vision_api_ocr(img: Image.Image) -> str:
+    try:
+        client = vision.ImageAnnotatorClient()
+        image_bytes = image_to_bytes(img)
+        image = vision.Image(content=image_bytes)
+
+        response = client.text_detection(image=image)
+        annotations = response.text_annotations
+
+        if annotations:
+            return annotations[0].description.strip()
+        return ""
+
+    except Exception as e:
+        print(f"[Vision API] OCR failed: {e}")
+        return ""
+
+# === Match expected fields with OCR output ===
+def match_fields_with_fallback(expected_fields, parsed_fields, img, layout) -> dict:
+    matched = {}
+    for key in expected_fields:
+        if key in parsed_fields:
+            matched[key] = parsed_fields[key]
+        else:
+            matched[key] = {"value": "", "confidence": 0}
+    return matched
