@@ -1,11 +1,11 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 2.6.0
+# VERSION: 2.7.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              editable bounding boxes, OCR via Document AI,
 #              fallback Vision API, and table extraction.
-#              Bounding box coordinates now scale correctly.
+#              Auto-refreshes when bounding boxes change.
 # ============================================================
 
 import streamlit as st
@@ -82,12 +82,21 @@ if uploaded_files and all([project_id, location, processor_id]):
             key=f"canvas_{file.name}"
         )
 
+        # === Detect canvas changes and trigger rerun ===
+        new_data = canvas_result.json_data
+        if "canvas_data" not in st.session_state:
+            st.session_state.canvas_data = None
+
+        if new_data and new_data != st.session_state.canvas_data:
+            st.session_state.canvas_data = new_data
+            st.experimental_rerun()
+
         form_boxes = []
-        if canvas_result.json_data:
+        if new_data:
             scale_x = processed.width / preview_img.width
             scale_y = processed.height / preview_img.height
 
-            for obj in canvas_result.json_data["objects"]:
+            for obj in new_data["objects"]:
                 x1 = obj["left"] * scale_x / processed.width
                 y1 = obj["top"] * scale_y / processed.height
                 x2 = (obj["left"] + obj["width"]) * scale_x / processed.width
@@ -98,9 +107,6 @@ if uploaded_files and all([project_id, location, processor_id]):
 
         for i, box in enumerate(form_boxes):
             st.subheader(f"🔍 Form {i+1} Results")
-
-            if st.button(f"🔄 Refresh Form {i+1}", key=f"refresh_{i}"):
-                st.experimental_rerun()
 
             auto = st.checkbox("Auto-detect table columns", value=True, key=f"auto_{i}")
             layout = {
