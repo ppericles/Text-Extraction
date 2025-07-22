@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.7.4
+# VERSION: 3.7.5
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              bounding box editing, internal layout logic,
@@ -215,7 +215,10 @@ if uploaded_files:
 
         # === Load existing boxes into canvas ===
         form_boxes = st.session_state.saved_boxes.get(file.name, [])
-        canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=1.0 / (processed.width / preview_img.width))
+        if form_boxes:
+            canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=1.0 / (processed.width / preview_img.width))
+        else:
+            canvas_json = {"objects": []}
 
         st.markdown("### ✏️ Draw or Edit Bounding Boxes")
         canvas_result = st_canvas(
