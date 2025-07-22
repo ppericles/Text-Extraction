@@ -1,6 +1,11 @@
+# ============================================================
 # FILE: utils_ocr.py
-# Description: OCR utilities for registry parser
-# Version: 1.2
+# VERSION: 1.2
+# AUTHOR: Pericles & Copilot
+# DESCRIPTION: OCR utilities for registry parser. Includes
+#              Document AI integration, Vision API fallback,
+#              and field matching with confidence scoring.
+# ============================================================
 
 import io
 from PIL import Image
