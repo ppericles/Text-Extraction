@@ -1,7 +1,11 @@
+# ============================================================
 # FILE: utils_layout.py
-# Description: Layout visualization tools for registry parser
-# Version: 1.0
-
+# VERSION: 1.0
+# AUTHOR: Pericles & Copilot
+# DESCRIPTION: Layout visualization tools for registry parser.
+#              Includes bounding box overlays, column break
+#              visualization, and label rendering.
+# ============================================================
 from PIL import ImageDraw, ImageFont
 
 # === Draw bounding boxes on image ===
