@@ -1,11 +1,3 @@
-# ============================================================
-# FILE: app.py
-# VERSION: 3.7.11
-# DESCRIPTION: Registry Form Parser with interactive canvas,
-#              multi-profile config, OCR, error resilience,
-#              batch export, and fallback logic.
-# ============================================================
-
 import streamlit as st
 from PIL import Image
 import os, json, tempfile
@@ -49,11 +41,11 @@ def convert_boxes_to_canvas_objects(boxes, scale=1.0):
         st.warning(f"⚠️ Box conversion error: {e}")
         return {"objects": []}
 
-# === Page Setup ===
+# === Page Config ===
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
 st.title("📄 Registry Form Parser")
 
-# === Credentials Upload ===
+# === Credential Upload ===
 st.sidebar.markdown("### 🔐 Load Google Credentials")
 cred_file = st.sidebar.file_uploader("Upload JSON credentials", type=["json"])
 if cred_file:
@@ -70,7 +62,7 @@ st.sidebar.markdown("### 🧠 OCR Engine")
 ocr_engine = st.sidebar.radio("Choose OCR Engine", ["Vision API", "Document AI"])
 use_docai = ocr_engine == "Document AI"
 
-# === Config Profile Encryption ===
+# === Config Encryption Setup ===
 CONFIG_DIR = "config"
 ENC_PATH = os.path.join(CONFIG_DIR, "processor_config.enc")
 LAST_PATH = os.path.join(CONFIG_DIR, "last_profile.txt")
@@ -97,11 +89,9 @@ if os.path.exists(LAST_PATH):
     default_profile = open(LAST_PATH).read().strip()
 
 profile_names = list(saved_profiles.keys())
-selected_profile = st.sidebar.selectbox(
-    "🔖 Select Profile", profile_names + ["New Profile"],
+selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + ["New Profile"],
     index=profile_names.index(default_profile) if default_profile in profile_names else len(profile_names)
 )
-
 if selected_profile == "New Profile":
     st.sidebar.markdown("### ➕ Create New Profile")
     new_name = st.sidebar.text_input("Profile Name")
@@ -164,7 +154,7 @@ else:
         st.sidebar.success(f"🗑️ Profile `{selected_profile}` deleted.")
         st.experimental_rerun()
 
-# === Trimming Mode ===
+# === Image Settings ===
 st.sidebar.markdown("### 🖼️ Image Settings")
 use_adaptive_trim = st.sidebar.checkbox("Use Adaptive Trimming", value=True)
 
@@ -181,16 +171,30 @@ if uploaded_files:
     for file in uploaded_files:
         if file.name not in st.session_state.saved_boxes:
             st.session_state.saved_boxes[file.name] = []
+if uploaded_files:
+    for file in uploaded_files:
+        st.header(f"📄 `{file.name}` — Select Forms")
+
         try:
-            form_boxes = st.session_state.saved_boxes.get(file.name, [])
+            image_raw = Image.open(file).convert("RGB")
+            processed = adaptive_trim_whitespace(image_raw.copy()) if use_adaptive_trim else trim_whitespace(image_raw.copy())
+            preview_img = resize_for_preview(processed)
+            st.image(preview_img, caption="Preview Image", use_column_width=True)
+        except Exception as e:
+            st.error(f"❌ Failed to process or preview image: {e}")
+            continue
+
+        form_boxes = st.session_state.saved_boxes.get(file.name, [])
+
+        try:
             scale = 1.0 / (processed.width / preview_img.width)
             canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=scale)
         except Exception as e:
-            st.warning(f"⚠️ Canvas setup failed: {e}")
+            st.warning(f"⚠️ Canvas conversion error: {e}")
             canvas_json = {"objects": []}
 
         st.markdown("### ✏️ Draw or Edit Bounding Boxes")
-    try:
+        try:
             canvas_result = st_canvas(
                 background_image=preview_img,
                 initial_drawing=canvas_json,
@@ -205,9 +209,9 @@ if uploaded_files:
                 update_streamlit=True,
                 key=f"canvas_{file.name}"
             )
-    except Exception as e:
-            st.error(f"❌ Canvas rendering failed: {e}")
-            st.stop()
+        except Exception as e:
+            st.error(f"❌ Failed to render canvas: {e}")
+            continue
 
         updated_boxes = []
         if canvas_result.json_data:
@@ -221,13 +225,13 @@ if uploaded_files:
                     y2 = int((obj["top"] + obj["height"]) * scale_y)
                     updated_boxes.append((x1, y1, x2, y2))
                 except Exception as e:
-                    st.warning(f"⚠️ Error reading box: {e}")
+                    st.warning(f"⚠️ Error extracting box: {e}")
             st.session_state.saved_boxes[file.name] = updated_boxes
 
         form_boxes = st.session_state.saved_boxes[file.name]
         st.markdown(f"### 📐 {len(form_boxes)} Form(s) Selected")
-
         parsed_results = []
+
         for i, box in enumerate(form_boxes):
             x1, y1, x2, y2 = box
             form_crop = processed.crop((x1, y1, x2, y2))
@@ -299,7 +303,6 @@ if uploaded_files:
                 for i, r in enumerate(parsed_results)
             }
             st.download_button("📥 Download All Data", json.dumps(all_data, indent=2), file_name=f"{file.name}_all_forms.json")
-
 # === Batch OCR with Progress Bar ===
 if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
     total_forms = sum(len(st.session_state.saved_boxes.get(f.name, [])) for f in uploaded_files)
@@ -308,25 +311,32 @@ if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
     st.session_state.parsed_forms = {}
 
     for file in uploaded_files:
-        image_raw = Image.open(file).convert("RGB")
-        processed = adaptive_trim_whitespace(image_raw.copy()) if use_adaptive_trim else trim_whitespace(image_raw.copy())
+        try:
+            image_raw = Image.open(file).convert("RGB")
+            processed = adaptive_trim_whitespace(image_raw.copy()) if use_adaptive_trim else trim_whitespace(image_raw.copy())
+        except Exception as e:
+            st.warning(f"⚠️ Failed to process `{file.name}`: {e}")
+            continue
+
         form_boxes = st.session_state.saved_boxes.get(file.name, [])
         parsed_results = []
 
         for i, box in enumerate(form_boxes):
-            x1, y1, x2, y2 = box
-            form_crop = processed.crop((x1, y1, x2, y2))
-            layout = {
-                "master_ratio": 0.5,
-                "group_a_box": [0.0, 0.0, 0.2, 1.0],
-                "group_b_box": [0.2, 0.0, 1.0, 0.5],
-                "detail_box": [0.0, 0.0, 1.0, 1.0],
-                "auto_detect": True
-            }
-            config = docai_config if use_docai else {}
-            result = process_single_form(form_crop, i, config, layout)
-            parsed_results.append(result)
-
+            try:
+                x1, y1, x2, y2 = box
+                form_crop = processed.crop((x1, y1, x2, y2))
+                layout = {
+                    "master_ratio": 0.5,
+                    "group_a_box": [0.0, 0.0, 0.2, 1.0],
+                    "group_b_box": [0.2, 0.0, 1.0, 0.5],
+                    "detail_box": [0.0, 0.0, 1.0, 1.0],
+                    "auto_detect": True
+                }
+                config = docai_config if use_docai else {}
+                result = process_single_form(form_crop, i, config, layout)
+                parsed_results.append(result)
+            except Exception as e:
+                st.warning(f"⚠️ Error processing form {i+1} in `{file.name}`: {e}")
             completed += 1
             progress.progress(completed / total_forms, text=f"Processed {completed} of {total_forms} forms")
 
