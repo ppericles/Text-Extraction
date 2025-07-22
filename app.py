@@ -1,9 +1,9 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.7.10
+# VERSION: 3.7.11
 # DESCRIPTION: Registry Form Parser with interactive canvas,
-#              multi-profile config, OCR, batch export, and
-#              resilient error handling.
+#              multi-profile config, OCR, error resilience,
+#              batch export, and fallback logic.
 # ============================================================
 
 import streamlit as st
@@ -49,11 +49,11 @@ def convert_boxes_to_canvas_objects(boxes, scale=1.0):
         st.warning(f"⚠️ Box conversion error: {e}")
         return {"objects": []}
 
-# === Streamlit Page Config ===
+# === Page Setup ===
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
 st.title("📄 Registry Form Parser")
 
-# === Google Credentials Upload ===
+# === Credentials Upload ===
 st.sidebar.markdown("### 🔐 Load Google Credentials")
 cred_file = st.sidebar.file_uploader("Upload JSON credentials", type=["json"])
 if cred_file:
@@ -65,12 +65,12 @@ if cred_file:
 else:
     st.sidebar.warning("⚠️ OCR disabled — upload service account JSON.")
 
-# === OCR Engine Choice ===
+# === OCR Engine Selection ===
 st.sidebar.markdown("### 🧠 OCR Engine")
 ocr_engine = st.sidebar.radio("Choose OCR Engine", ["Vision API", "Document AI"])
 use_docai = ocr_engine == "Document AI"
 
-# === Encrypted Multi-Profile Config ===
+# === Config Profile Encryption ===
 CONFIG_DIR = "config"
 ENC_PATH = os.path.join(CONFIG_DIR, "processor_config.enc")
 LAST_PATH = os.path.join(CONFIG_DIR, "last_profile.txt")
@@ -97,7 +97,10 @@ if os.path.exists(LAST_PATH):
     default_profile = open(LAST_PATH).read().strip()
 
 profile_names = list(saved_profiles.keys())
-selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + ["New Profile"], index=profile_names.index(default_profile) if default_profile in profile_names else len(profile_names))
+selected_profile = st.sidebar.selectbox(
+    "🔖 Select Profile", profile_names + ["New Profile"],
+    index=profile_names.index(default_profile) if default_profile in profile_names else len(profile_names)
+)
 
 if selected_profile == "New Profile":
     st.sidebar.markdown("### ➕ Create New Profile")
@@ -106,7 +109,7 @@ if selected_profile == "New Profile":
     location = st.sidebar.text_input("Location")
     processor_id = st.sidebar.text_input("Processor ID")
 
-    def save_new_profile(name, proj, loc, proc):
+    def save_profile(name, proj, loc, proc):
         saved_profiles[name] = {
             "project_id": proj.strip(),
             "location": loc.strip(),
@@ -120,7 +123,7 @@ if selected_profile == "New Profile":
 
     if st.sidebar.button("💾 Save Profile"):
         if new_name and project_id and location and processor_id:
-            save_new_profile(new_name, project_id, location, processor_id)
+            save_profile(new_name, project_id, location, processor_id)
         else:
             st.sidebar.error("⚠️ Please fill in all fields.")
 
@@ -129,7 +132,7 @@ if selected_profile == "New Profile":
     if st.sidebar.button("📥 Load from Paste"):
         try:
             data = json.loads(pasted_json)
-            save_new_profile(new_name, data.get("project_id", ""), data.get("location", ""), data.get("processor_id", ""))
+            save_profile(new_name, data.get("project_id", ""), data.get("location", ""), data.get("processor_id", ""))
         except:
             st.sidebar.error("❌ Invalid JSON format.")
 
@@ -137,7 +140,7 @@ if selected_profile == "New Profile":
     if uploaded_profile:
         try:
             data = json.load(uploaded_profile)
-            save_new_profile(new_name, data.get("project_id", ""), data.get("location", ""), data.get("processor_id", ""))
+            save_profile(new_name, data.get("project_id", ""), data.get("location", ""), data.get("processor_id", ""))
         except:
             st.sidebar.error("❌ Failed to parse uploaded profile.")
 else:
@@ -161,17 +164,16 @@ else:
         st.sidebar.success(f"🗑️ Profile `{selected_profile}` deleted.")
         st.experimental_rerun()
 
-# === Image Trimming Mode ===
+# === Trimming Mode ===
 st.sidebar.markdown("### 🖼️ Image Settings")
 use_adaptive_trim = st.sidebar.checkbox("Use Adaptive Trimming", value=True)
 
 # === File Upload ===
 uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
-# === Session State Init ===
+# === Session Initialization ===
 if "saved_boxes" not in st.session_state:
     st.session_state.saved_boxes = {}
-
 if "parsed_forms" not in st.session_state:
     st.session_state.parsed_forms = {}
 
@@ -179,32 +181,34 @@ if uploaded_files:
     for file in uploaded_files:
         if file.name not in st.session_state.saved_boxes:
             st.session_state.saved_boxes[file.name] = []
-        # === Load existing boxes into canvas ===
-        form_boxes = st.session_state.saved_boxes.get(file.name, [])
-        try:
+                    try:
+            form_boxes = st.session_state.saved_boxes.get(file.name, [])
             scale = 1.0 / (processed.width / preview_img.width)
             canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=scale)
         except Exception as e:
-            st.warning(f"⚠️ Canvas conversion error: {e}")
+            st.warning(f"⚠️ Canvas setup failed: {e}")
             canvas_json = {"objects": []}
 
         st.markdown("### ✏️ Draw or Edit Bounding Boxes")
-        canvas_result = st_canvas(
-            background_image=preview_img,
-            initial_drawing=canvas_json,
-            drawing_mode="rect",
-            drawing_mode_selector=True,
-            display_toolbar=True,
-            editable=True,
-            fill_color="rgba(255, 0, 0, 0.3)",
-            stroke_width=2,
-            height=preview_img.height,
-            width=preview_img.width,
-            update_streamlit=True,
-            key=f"canvas_{file.name}"
-        )
+        try:
+            canvas_result = st_canvas(
+                background_image=preview_img,
+                initial_drawing=canvas_json,
+                drawing_mode="rect",
+                drawing_mode_selector=True,
+                display_toolbar=True,
+                editable=True,
+                fill_color="rgba(255, 0, 0, 0.3)",
+                stroke_width=2,
+                height=preview_img.height,
+                width=preview_img.width,
+                update_streamlit=True,
+                key=f"canvas_{file.name}"
+            )
+        except Exception as e:
+            st.error(f"❌ Canvas rendering failed: {e}")
+            st.stop()
 
-        # === Save updated boxes ===
         updated_boxes = []
         if canvas_result.json_data:
             scale_x = processed.width / preview_img.width
@@ -220,6 +224,113 @@ if uploaded_files:
                     st.warning(f"⚠️ Error reading box: {e}")
             st.session_state.saved_boxes[file.name] = updated_boxes
 
-        # === Continue with layout, OCR, overlays, and export ===
-        # (This section continues with form parsing, layout sliders,
-        #  table extraction, and download buttons as in previous versions.)
+        form_boxes = st.session_state.saved_boxes[file.name]
+        st.markdown(f"### 📐 {len(form_boxes)} Form(s) Selected")
+
+        parsed_results = []
+        for i, box in enumerate(form_boxes):
+            x1, y1, x2, y2 = box
+            form_crop = processed.crop((x1, y1, x2, y2))
+            st.subheader(f"🧾 Form {i+1}")
+            st.image(resize_for_preview(form_crop), caption="📄 Cropped Form", use_column_width=True)
+
+            st.markdown("### 🧩 Internal Layout Settings")
+            auto = st.checkbox("Auto-detect table columns", value=True, key=f"auto_{i}")
+            layout = {
+                "master_ratio": 0.5,
+                "group_a_box": [0.0, 0.0, 0.2, 1.0],
+                "group_b_box": [0.2, 0.0, 1.0, 0.5],
+                "detail_box": [0.0, 0.0, 1.0, 1.0],
+                "auto_detect": auto
+            }
+
+            if not auto:
+                table_columns = []
+                for c in range(6):
+                    cx1 = st.slider(f"Column {c+1} - X1", 0.0, 1.0, c * 0.15, 0.01, key=f"cx1_{i}_{c}")
+                    cx2 = st.slider(f"Column {c+1} - X2", 0.0, 1.0, (c + 1) * 0.15, 0.01, key=f"cx2_{i}_{c}")
+                    table_columns.append((cx1, cx2))
+                layout["table_columns"] = table_columns
+
+            config = docai_config if use_docai else {}
+            result = process_single_form(form_crop, i, config, layout)
+            parsed_results.append(result)
+
+            st.image(resize_for_preview(draw_layout_overlay(form_crop, layout)), caption="🔍 Layout Overlay", use_column_width=True)
+            st.image(resize_for_preview(draw_column_breaks(result["table_crop"], result["column_breaks"])), caption="📊 Column Breaks", use_column_width=True)
+            st.image(resize_for_preview(draw_row_breaks(result["table_crop"], rows=10, header=True)), caption="📏 Row Breaks", use_column_width=True)
+
+            st.markdown("### 🧾 Group A")
+            for label, data in result["group_a"].items():
+                emoji = "🟢" if data["confidence"] >= 90 else "🟡" if data["confidence"] >= 70 else "🔴"
+                st.text(f"{emoji} {label}: {data['value']} ({data['confidence']}%)")
+
+            st.markdown("### 🧾 Group B")
+            for label, data in result["group_b"].items():
+                emoji = "🟢" if data["confidence"] >= 90 else "🟡" if data["confidence"] >= 70 else "🔴"
+                st.text(f"{emoji} {label}: {data['value']} ({data['confidence']}%)")
+
+            st.markdown("### 📊 Parsed Table Rows")
+            if result["table_rows"]:
+                st.dataframe(result["table_rows"], use_container_width=True)
+            else:
+                st.warning("⚠️ No table rows extracted.")
+
+            st.download_button("📥 Download Layout JSON", json.dumps(layout, indent=2), file_name=f"form_{i+1}_layout.json")
+            buffer = BytesIO()
+            form_crop.save(buffer, format="PNG")
+            st.download_button("🖼️ Download Cropped Form", buffer.getvalue(), file_name=f"form_{i+1}.png")
+            st.download_button("📤 Download Parsed Data", json.dumps({
+                "group_a": result["group_a"],
+                "group_b": result["group_b"],
+                "table_rows": result["table_rows"]
+            }, indent=2), file_name=f"form_{i+1}_data.json")
+
+        st.session_state.parsed_forms[file.name] = parsed_results
+
+        st.markdown("## 📦 Export All Forms")
+        if st.button("📤 Export All Parsed Data", key=f"export_all_{file.name}"):
+            all_data = {
+                f"form_{i+1}": {
+                    "group_a": r["group_a"],
+                    "group_b": r["group_b"],
+                    "table_rows": r["table_rows"]
+                }
+                for i, r in enumerate(parsed_results)
+            }
+            st.download_button("📥 Download All Data", json.dumps(all_data, indent=2), file_name=f"{file.name}_all_forms.json")
+
+# === Batch OCR with Progress Bar ===
+if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
+    total_forms = sum(len(st.session_state.saved_boxes.get(f.name, [])) for f in uploaded_files)
+    progress = st.progress(0, text="Processing forms...")
+    completed = 0
+    st.session_state.parsed_forms = {}
+
+    for file in uploaded_files:
+        image_raw = Image.open(file).convert("RGB")
+        processed = adaptive_trim_whitespace(image_raw.copy()) if use_adaptive_trim else trim_whitespace(image_raw.copy())
+        form_boxes = st.session_state.saved_boxes.get(file.name, [])
+        parsed_results = []
+
+        for i, box in enumerate(form_boxes):
+            x1, y1, x2, y2 = box
+            form_crop = processed.crop((x1, y1, x2, y2))
+            layout = {
+                "master_ratio": 0.5,
+                "group_a_box": [0.0, 0.0, 0.2, 1.0],
+                "group_b_box": [0.2, 0.0, 1.0, 0.5],
+                "detail_box": [0.0, 0.0, 1.0, 1.0],
+                "auto_detect": True
+            }
+            config = docai_config if use_docai else {}
+            result = process_single_form(form_crop, i, config, layout)
+            parsed_results.append(result)
+
+            completed += 1
+            progress.progress(completed / total_forms, text=f"Processed {completed} of {total_forms} forms")
+
+        st.session_state.parsed_forms[file.name] = parsed_results
+
+    progress.empty()
+    st.success("✅ Batch OCR completed.")
