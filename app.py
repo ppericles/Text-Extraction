@@ -1,11 +1,11 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.5.0
+# VERSION: 3.6.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              bounding box selection, internal layout logic,
 #              OCR via Vision API or Document AI, table parsing,
-#              session state persistence, and batch export.
+#              multi-profile config, and batch export.
 # ============================================================
 
 import streamlit as st
@@ -16,12 +16,14 @@ from streamlit_drawable_canvas import st_canvas
 
 from utils_image import (
     resize_for_preview,
-    split_zones_fixed,
-    trim_whitespace
+    trim_whitespace,
+    split_zones_fixed
 )
-from utils_layout import extract_fields_from_layout
+from utils_layout import (
+    extract_fields_from_layout,
+    draw_layout_overlay
+)
 from utils_parser import process_single_form
-from utils_ocr import form_parser_ocr, vision_api_ocr
 
 # === Page Setup ===
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
@@ -44,27 +46,57 @@ st.sidebar.markdown("### 🧠 OCR Engine")
 ocr_engine = st.sidebar.radio("Choose OCR Engine", ["Vision API", "Document AI"])
 use_docai = ocr_engine == "Document AI"
 
-# === Document AI Config ===
-project_id = st.sidebar.text_input("Project ID")
-location = st.sidebar.text_input("Location")
-processor_id = st.sidebar.text_input("Processor ID")
+# === Multi-Profile Document AI Config ===
+CONFIG_DIR = "config"
+CONFIG_PATH = os.path.join(CONFIG_DIR, "processor_config.json")
+os.makedirs(CONFIG_DIR, exist_ok=True)
+
+saved_profiles = {}
+if os.path.exists(CONFIG_PATH):
+    try:
+        saved_profiles = json.load(open(CONFIG_PATH))
+    except Exception:
+        saved_profiles = {}
+
+profile_names = list(saved_profiles.keys())
+selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + ["New Profile"])
+
+if selected_profile == "New Profile":
+    st.sidebar.markdown("### ➕ Create New Profile")
+    new_name = st.sidebar.text_input("Profile Name")
+    project_id = st.sidebar.text_input("Project ID")
+    location = st.sidebar.text_input("Location")
+    processor_id = st.sidebar.text_input("Processor ID")
+
+    if st.sidebar.button("💾 Save Profile") and new_name:
+        saved_profiles[new_name] = {
+            "project_id": project_id.strip(),
+            "location": location.strip(),
+            "processor_id": processor_id.strip()
+        }
+        json.dump(saved_profiles, open(CONFIG_PATH, "w"), indent=2)
+        st.sidebar.success(f"✅ Profile `{new_name}` saved.")
+        st.experimental_rerun()
+else:
+    st.sidebar.markdown(f"### 📁 Profile: `{selected_profile}`")
+    profile = saved_profiles.get(selected_profile, {})
+    project_id = profile.get("project_id", "")
+    location = profile.get("location", "")
+    processor_id = profile.get("processor_id", "")
 
 docai_config = {
-    "project_id": project_id.strip(),
-    "location": location.strip(),
-    "processor_id": processor_id.strip()
+    "project_id": project_id,
+    "location": location,
+    "processor_id": processor_id
 }
 
 # === File Upload ===
 uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
-# === Session State ===
 if "saved_boxes" not in st.session_state:
     st.session_state.saved_boxes = {}
 if "parsed_forms" not in st.session_state:
     st.session_state.parsed_forms = {}
-
-# === Main Logic ===
 if uploaded_files:
     for file in uploaded_files:
         st.header(f"📄 `{file.name}` — Select Forms")
@@ -135,8 +167,8 @@ if uploaded_files:
             result = process_single_form(form_crop, i, config, layout)
             parsed_results.append(result)
 
-            st.image(resize_for_preview(result["master"]), caption="🟦 Master Zone", use_column_width=True)
-            st.image(resize_for_preview(result["detail"]), caption="📘 Detail Zone", use_column_width=True)
+            overlay = draw_layout_overlay(form_crop, layout)
+            st.image(resize_for_preview(overlay), caption="🔍 Layout Overlay", use_column_width=True)
 
             st.markdown("### 🧾 Group A (ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ)")
             for label, data in result["group_a"].items():
@@ -171,7 +203,6 @@ if uploaded_files:
 
         st.session_state.parsed_forms[file.name] = parsed_results
 
-        # === Batch Export ===
         st.markdown("## 📦 Export All Forms")
         if st.button("📤 Export All Parsed Data"):
             all_data = {
