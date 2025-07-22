@@ -1,10 +1,10 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.0.0
+# VERSION: 3.1.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
-#              bounding box selection, step-by-step layout
-#              definition, OCR via Document AI, and table parsing.
+#              bounding box cropping, OCR via Document AI,
+#              and table parsing. Cropped form preview updates.
 # ============================================================
 
 import streamlit as st
@@ -97,13 +97,12 @@ if uploaded_files and all([project_id, location, processor_id]):
         st.markdown(f"### 📐 {len(form_boxes)} Form(s) Detected")
 
         for i, box in enumerate(form_boxes):
-            st.subheader(f"🔍 Form {i+1} Cropped Preview")
+            st.subheader(f"🔍 Form {i+1} Results")
 
             x1, y1, x2, y2 = box
             form_crop = processed.crop((x1, y1, x2, y2))
             st.image(resize_for_preview(form_crop), caption="📄 Cropped Form", use_column_width=True)
 
-            st.markdown("### 🧩 Define Internal Layout")
             auto = st.checkbox("Auto-detect table columns", value=True, key=f"auto_{i}")
             layout = {
                 "master_ratio": 0.5,
@@ -122,15 +121,13 @@ if uploaded_files and all([project_id, location, processor_id]):
                     table_columns.append((cx1, cx2))
                 layout["table_columns"] = table_columns
 
-            zones, _ = split_zones_fixed(form_crop, layout["master_ratio"])
-            master_zone, detail_zone = zones
+            result = process_single_form(form_crop, i, config, layout)
 
-            st.image(resize_for_preview(master_zone), caption="🟦 Master Zone", use_column_width=True)
-            st.image(resize_for_preview(detail_zone), caption="📘 Detail Zone", use_column_width=True)
+            st.image(resize_for_preview(result["master"]), caption="🟦 Master Zone", use_column_width=True)
 
-            result = process_single_form(processed, box, i, config, layout)
-            result["master"] = master_zone
-            result["detail"] = detail_zone
+            overlay = result["detail"].copy()
+            overlay = draw_column_breaks(overlay, result["column_breaks"])
+            st.image(resize_for_preview(overlay), caption="📘 Detail Zone", use_column_width=True)
 
             st.markdown("### 🧾 Group A (ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ)")
             for label, data in result["group_a"].items():
