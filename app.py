@@ -97,18 +97,18 @@ profile_names = list(saved_profiles.keys())
 selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + ["New Profile"],
     index=profile_names.index(default_profile) if default_profile in profile_names else len(profile_names)
 )
-        form_boxes = st.session_state.saved_boxes[file.name]
-        parsed_results = []
+form_boxes = st.session_state.saved_boxes[file.name]
+parsed_results = []
 
-        for i, box in enumerate(form_boxes):
-            x1, y1, x2, y2 = box
-            form_crop = processed.crop((x1, y1, x2, y2))
-            st.subheader(f"🧾 Form {i+1}")
-            st.image(resize_for_preview(form_crop), caption="📄 Cropped Form", use_column_width=True)
+for i, box in enumerate(form_boxes):
+    x1, y1, x2, y2 = box
+    form_crop = processed.crop((x1, y1, x2, y2))
+    st.subheader(f"🧾 Form {i+1}")
+    st.image(resize_for_preview(form_crop), caption="📄 Cropped Form", use_column_width=True)
 
-            st.markdown("### 🧩 Internal Layout Settings")
-            auto = st.checkbox("Auto-detect table columns", value=True, key=f"auto_{i}")
-            layout = {
+    st.markdown("### 🧩 Internal Layout Settings")
+    auto = st.checkbox("Auto-detect table columns", value=True, key=f"auto_{i}")
+    layout = {
                 "master_ratio": 0.5,
                 "group_a_box": [0.0, 0.0, 0.2, 1.0],
                 "group_b_box": [0.2, 0.0, 1.0, 0.5],
@@ -116,61 +116,61 @@ selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + [
                 "auto_detect": auto
             }
 
-            if not auto:
-                table_columns = []
-                for c in range(6):
-                    cx1 = st.slider(f"Column {c+1} - X1", 0.0, 1.0, c * 0.15, 0.01, key=f"cx1_{i}_{c}")
-                    cx2 = st.slider(f"Column {c+1} - X2", 0.0, 1.0, (c + 1) * 0.15, 0.01, key=f"cx2_{i}_{c}")
-                    table_columns.append((cx1, cx2))
-                layout["table_columns"] = table_columns
+    if not auto:
+        table_columns = []
+        for c in range(6):
+            cx1 = st.slider(f"Column {c+1} - X1", 0.0, 1.0, c * 0.15, 0.01, key=f"cx1_{i}_{c}")
+            cx2 = st.slider(f"Column {c+1} - X2", 0.0, 1.0, (c + 1) * 0.15, 0.01, key=f"cx2_{i}_{c}")
+            table_columns.append((cx1, cx2))
+            layout["table_columns"] = table_columns
 
-            config = docai_config if use_docai else {}
-            result = process_single_form(form_crop, i, config, layout)
-            parsed_results.append(result)
+        config = docai_config if use_docai else {}
+        result = process_single_form(form_crop, i, config, layout)
+        parsed_results.append(result)
 
-            st.image(resize_for_preview(draw_layout_overlay(form_crop, layout)), caption="🔍 Layout Overlay", use_column_width=True)
-            st.image(resize_for_preview(draw_column_breaks(result["table_crop"], result["column_breaks"])), caption="📊 Column Breaks", use_column_width=True)
-            st.image(resize_for_preview(draw_row_breaks(result["table_crop"], rows=10, header=True)), caption="📏 Row Breaks", use_column_width=True)
+        st.image(resize_for_preview(draw_layout_overlay(form_crop, layout)), caption="🔍 Layout Overlay", use_column_width=True)
+        st.image(resize_for_preview(draw_column_breaks(result["table_crop"], result["column_breaks"])), caption="📊 Column Breaks", use_column_width=True)
+        st.image(resize_for_preview(draw_row_breaks(result["table_crop"], rows=10, header=True)), caption="📏 Row Breaks", use_column_width=True)
 
-            st.markdown("### 🧾 Group A")
-            for label, data in result["group_a"].items():
-                emoji = "🟢" if data["confidence"] >= 90 else "🟡" if data["confidence"] >= 70 else "🔴"
-                st.text(f"{emoji} {label}: {data['value']} ({data['confidence']}%)")
+        st.markdown("### 🧾 Group A")
+        for label, data in result["group_a"].items():
+            emoji = "🟢" if data["confidence"] >= 90 else "🟡" if data["confidence"] >= 70 else "🔴"
+            st.text(f"{emoji} {label}: {data['value']} ({data['confidence']}%)")
 
-            st.markdown("### 🧾 Group B")
-            for label, data in result["group_b"].items():
-                emoji = "🟢" if data["confidence"] >= 90 else "🟡" if data["confidence"] >= 70 else "🔴"
-                st.text(f"{emoji} {label}: {data['value']} ({data['confidence']}%)")
+        st.markdown("### 🧾 Group B")
+        for label, data in result["group_b"].items():
+            emoji = "🟢" if data["confidence"] >= 90 else "🟡" if data["confidence"] >= 70 else "🔴"
+            st.text(f"{emoji} {label}: {data['value']} ({data['confidence']}%)")
 
-            st.markdown("### 📊 Parsed Table Rows")
-            if result["table_rows"]:
-                st.dataframe(result["table_rows"], use_container_width=True)
-            else:
-                st.warning("⚠️ No table rows extracted.")
+        st.markdown("### 📊 Parsed Table Rows")
+        if result["table_rows"]:
+            st.dataframe(result["table_rows"], use_container_width=True)
+        else:
+            st.warning("⚠️ No table rows extracted.")
 
-            st.download_button("📥 Download Layout JSON", json.dumps(layout, indent=2), file_name=f"form_{i+1}_layout.json")
-            buffer = BytesIO()
-            form_crop.save(buffer, format="PNG")
-            st.download_button("🖼️ Download Cropped Form", buffer.getvalue(), file_name=f"form_{i+1}.png")
-            st.download_button("📤 Download Parsed Data", json.dumps({
-                "group_a": result["group_a"],
-                "group_b": result["group_b"],
-                "table_rows": result["table_rows"]
+        st.download_button("📥 Download Layout JSON", json.dumps(layout, indent=2), file_name=f"form_{i+1}_layout.json")
+        buffer = BytesIO()
+        form_crop.save(buffer, format="PNG")
+        st.download_button("🖼️ Download Cropped Form", buffer.getvalue(), file_name=f"form_{i+1}.png")
+        st.download_button("📤 Download Parsed Data", json.dumps({
+            "group_a": result["group_a"],
+            "group_b": result["group_b"],
+            "table_rows": result["table_rows"]
             }, indent=2), file_name=f"form_{i+1}_data.json")
 
-        st.session_state.parsed_forms[file.name] = parsed_results
+    st.session_state.parsed_forms[file.name] = parsed_results
 
-        st.markdown("## 📦 Export All Forms")
-        if st.button("📤 Export All Parsed Data", key=f"export_all_{file.name}"):
-            all_data = {
-                f"form_{i+1}": {
-                    "group_a": r["group_a"],
-                    "group_b": r["group_b"],
-                    "table_rows": r["table_rows"]
+    st.markdown("## 📦 Export All Forms")
+    if st.button("📤 Export All Parsed Data", key=f"export_all_{file.name}"):
+        all_data = {
+            f"form_{i+1}": {
+                "group_a": r["group_a"],
+                "group_b": r["group_b"],
+                "table_rows": r["table_rows"]
                 }
-                for i, r in enumerate(parsed_results)
-            }
-            st.download_button("📥 Download All Data", json.dumps(all_data, indent=2), file_name=f"{file.name}_all_forms.json")
+            for i, r in enumerate(parsed_results)
+        }
+        st.download_button("📥 Download All Data", json.dumps(all_data, indent=2), file_name=f"{file.name}_all_forms.json")
 # === Batch OCR with Progress Bar ===
 if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
     total_forms = sum(len(st.session_state.saved_boxes.get(f.name, [])) for f in uploaded_files)
