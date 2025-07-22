@@ -176,6 +176,47 @@ if uploaded_files:
     for file in uploaded_files:
         if file.name not in st.session_state.saved_boxes:
             st.session_state.saved_boxes[file.name] = []
+        st.header(f"📄 `{file.name}` — Select Forms")
+
+        try:
+            image_raw = Image.open(file).convert("RGB")
+            processed = adaptive_trim_whitespace(image_raw.copy()) if use_adaptive_trim else trim_whitespace(image_raw.copy())
+            preview_img = resize_for_preview(processed)
+            st.image(preview_img, caption="Preview Image", use_column_width=True)
+        except Exception as e:
+            st.error(f"❌ Failed to process or preview image: {e}")
+            continue
+
+        form_boxes = st.session_state.saved_boxes.get(file.name, [])
+
+        try:
+            scale = 1.0 / (processed.width / preview_img.width)
+            canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=scale)
+        except Exception as e:
+            st.warning(f"⚠️ Canvas conversion error: {e}")
+            canvas_json = {"objects": []}
+
+        st.markdown("### ✏️ Draw or Edit Bounding Boxes")
+        mode = st.selectbox("✏️ Drawing Mode", ["rect", "circle", "line", "freedraw", "transform"], key=f"mode_{file.name}")
+        canvas_result = None
+        try:
+            canvas_result = st_canvas(
+                background_image=preview_img,
+                initial_drawing=canvas_json,
+                drawing_mode=mode,
+                display_toolbar=True,
+                editable=True,
+                fill_color="rgba(255, 0, 0, 0.3)",
+                stroke_width=2,
+                height=preview_img.height,
+                width=preview_img.width,
+                update_streamlit=True,
+                key=f"canvas_{file.name}"
+            )
+        except Exception as e:
+            st.error(f"❌ Failed to render canvas: {e}")
+            continue
+
         updated_boxes = []
         if "canvas_result" in locals() and canvas_result and canvas_result.json_data:
             scale_x = processed.width / preview_img.width
