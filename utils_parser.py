@@ -1,10 +1,9 @@
 # ============================================================
 # FILE: utils_parser.py
-# VERSION: 1.0
+# VERSION: 1.1
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Form-level parsing logic for registry scans.
-#              Splits zones, extracts fields, parses tables,
-#              and handles fallback logic for missing values.
+#              Crops using absolute pixel coordinates.
 # ============================================================
 
 from utils_ocr import form_parser_ocr, match_fields_with_fallback, vision_api_ocr
@@ -49,9 +48,9 @@ def extract_table(table_img, config, column_breaks, rows=10, header=True):
     return headers, data
 
 def process_single_form(image, box, index, config, layout):
-    w, h = image.size
+    # box contains absolute pixel coordinates
     x1, y1, x2, y2 = box
-    form_crop = image.crop((int(x1*w), int(y1*h), int(x2*w), int(y2*h)))
+    form_crop = image.crop((x1, y1, x2, y2))
     zones, _ = split_zones_fixed(form_crop, layout.get("master_ratio", 0.5))
     master_zone, detail_zone = zones
 
