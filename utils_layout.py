@@ -1,71 +1,50 @@
-# ==== utils_layout.py ====
+# FILE: utils_layout.py
+# Description: Layout visualization tools for registry parser
+# Version: 1.0
 
-import json
+from PIL import ImageDraw, ImageFont
 
-class LayoutManager:
-    def __init__(self, image_size):
-        self.width, self.height = image_size
-
-    def to_normalized(self, box):
-        """
-        Convert absolute box (x1, y1, x2, y2) to normalized coordinates.
-        """
+# === Draw bounding boxes on image ===
+def draw_boxes(img, boxes, color="red", width=2):
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+    for box in boxes:
         x1, y1, x2, y2 = box
-        return [
-            round(x1 / self.width, 4),
-            round(y1 / self.height, 4),
-            round(x2 / self.width, 4),
-            round(y2 / self.height, 4)
-        ]
+        draw.rectangle(
+            [int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h)],
+            outline=color,
+            width=width
+        )
+    return img
 
-    def to_absolute(self, box):
-        """
-        Convert normalized box to absolute pixel coordinates.
-        """
-        x1, y1, x2, y2 = box
-        return [
-            int(x1 * self.width),
-            int(y1 * self.height),
-            int(x2 * self.width),
-            int(y2 * self.height)
-        ]
+# === Draw vertical column breaks ===
+def draw_column_breaks(img, column_breaks, color="blue", width=2):
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+    for x1, _ in column_breaks:
+        x = int(x1 * w)
+        draw.line([(x, 0), (x, h)], fill=color, width=width)
+    return img
 
-    def save_layout(self, layout_dict):
-        """
-        Normalize all boxes in layout_dict.
-        """
-        return {
-            label: self.to_normalized(tuple(box))
-            for label, box in layout_dict.items()
-        }
+# === Overlay labels and confidence scores ===
+def draw_labels(img, fields, box, font_size=14):
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+    x1, y1, x2, y2 = box
+    zone_w = int((x2 - x1) * w)
+    zone_h = int((y2 - y1) * h)
+    zone_x = int(x1 * w)
+    zone_y = int(y1 * h)
 
-    def load_layout(self, layout_dict):
-        """
-        Convert normalized layout to absolute coordinates.
-        """
-        return {
-            label: self.to_absolute(box)
-            for label, box in layout_dict.items()
-        }
+    try:
+        font = ImageFont.truetype("arial.ttf", font_size)
+    except:
+        font = ImageFont.load_default()
 
+    y_offset = zone_y + 5
+    for label, data in fields.items():
+        text = f"{label}: {data['value']} ({data['confidence']}%)"
+        draw.text((zone_x + 5, y_offset), text, fill="black", font=font)
+        y_offset += font_size + 4
 
-def load_default_layout(zone_id, template_paths):
-    """
-    Load default layout template for a given zone.
-    """
-    path = template_paths.get(zone_id)
-    if not path:
-        return {}
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def ensure_zone_layout(zone_id, expected_labels, layout_managers, box_layouts, st):
-    """
-    Validate that all expected labels exist in the layout.
-    """
-    missing = [label for label in expected_labels if label not in box_layouts[zone_id]]
-    if missing:
-        st.warning(f"⚠️ Zone {zone_id} is missing fields: {', '.join(missing)}")
-    else:
-        st.success(f"✅ Zone {zone_id} layout includes all expected fields.")
+    return img
