@@ -1,12 +1,12 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.7.2
+# VERSION: 3.7.3
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              bounding box selection, internal layout logic,
 #              OCR via Vision API or Document AI, table parsing,
 #              encrypted multi-profile config, visual overlays,
-#              adaptive trimming, and batch export with progress.
+#              adaptive trimming toggle, and batch export.
 # ============================================================
 
 import streamlit as st
@@ -172,6 +172,9 @@ else:
         st.experimental_rerun()
 
 # === File Upload ===
+st.sidebar.markdown("### 🖼️ Image Settings")
+use_adaptive_trim = st.sidebar.checkbox("Use Adaptive Trimming", value=True)
+
 uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
 if "saved_boxes" not in st.session_state:
@@ -183,8 +186,9 @@ if uploaded_files:
         st.header(f"📄 `{file.name}` — Select Forms")
 
         image = Image.open(file).convert("RGB")
-        processed = adaptive_trim_whitespace(image.copy())
         preview_img = resize_for_preview(image)
+
+        st.image(preview_img, caption="Preview Image", use_column_width=True)
 
         st.markdown("### ✏️ Draw Bounding Boxes")
         canvas_result = st_canvas(
@@ -197,6 +201,8 @@ if uploaded_files:
             drawing_mode="rect",
             key=f"canvas_{file.name}"
         )
+
+        processed = adaptive_trim_whitespace(image.copy()) if use_adaptive_trim else trim_whitespace(image.copy())
 
         form_boxes = []
         if canvas_result.json_data:
@@ -311,7 +317,7 @@ if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
 
     for file in uploaded_files:
         image = Image.open(file).convert("RGB")
-        processed = adaptive_trim_whitespace(image.copy())
+        processed = adaptive_trim_whitespace(image.copy()) if use_adaptive_trim else trim_whitespace(image.copy())
         form_boxes = st.session_state.saved_boxes.get(file.name, [])
         parsed_results = []
 
