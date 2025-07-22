@@ -1,11 +1,11 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 2.5.0
+# VERSION: 2.6.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              editable bounding boxes, OCR via Document AI,
 #              fallback Vision API, and table extraction.
-#              Includes per-form refresh to update crops.
+#              Bounding box coordinates now scale correctly.
 # ============================================================
 
 import streamlit as st
@@ -84,11 +84,14 @@ if uploaded_files and all([project_id, location, processor_id]):
 
         form_boxes = []
         if canvas_result.json_data:
+            scale_x = processed.width / preview_img.width
+            scale_y = processed.height / preview_img.height
+
             for obj in canvas_result.json_data["objects"]:
-                x1 = obj["left"] / preview_img.width
-                y1 = obj["top"] / preview_img.height
-                x2 = (obj["left"] + obj["width"]) / preview_img.width
-                y2 = (obj["top"] + obj["height"]) / preview_img.height
+                x1 = obj["left"] * scale_x / processed.width
+                y1 = obj["top"] * scale_y / processed.height
+                x2 = (obj["left"] + obj["width"]) * scale_x / processed.width
+                y2 = (obj["top"] + obj["height"]) * scale_y / processed.height
                 form_boxes.append((x1, y1, x2, y2))
 
         st.markdown(f"### 📐 {len(form_boxes)} Form(s) Detected")
