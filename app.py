@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.7.6
+# VERSION: 3.7.7
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              bounding box editing, internal layout logic,
@@ -32,25 +32,29 @@ from utils_parser import process_single_form
 
 # === Helper: Convert Saved Boxes to Canvas Format ===
 def convert_boxes_to_canvas_objects(boxes, scale=1.0):
-    objects = []
-    for box in boxes:
-        x1, y1, x2, y2 = box
-        left = x1 * scale
-        top = y1 * scale
-        width = (x2 - x1) * scale
-        height = (y2 - y1) * scale
-        obj = {
-            "type": "rect",
-            "left": left,
-            "top": top,
-            "width": width,
-            "height": height,
-            "fill": "rgba(255, 0, 0, 0.3)",
-            "stroke": "red",
-            "strokeWidth": 2
-        }
-        objects.append(obj)
-    return {"objects": objects}
+    try:
+        objects = []
+        for box in boxes:
+            x1, y1, x2, y2 = box
+            left = x1 * scale
+            top = y1 * scale
+            width = (x2 - x1) * scale
+            height = (y2 - y1) * scale
+            obj = {
+                "type": "rect",
+                "left": left,
+                "top": top,
+                "width": width,
+                "height": height,
+                "fill": "rgba(255, 0, 0, 0.3)",
+                "stroke": "red",
+                "strokeWidth": 2
+            }
+            objects.append(obj)
+        return {"objects": objects}
+    except Exception as e:
+        st.warning(f"⚠️ Failed to convert bounding boxes: {e}")
+        return {"objects": []}
 
 # === Page Setup ===
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
@@ -215,7 +219,12 @@ if uploaded_files:
 
         # === Load existing boxes into canvas ===
         form_boxes = st.session_state.saved_boxes.get(file.name, [])
-        canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=1.0 / (processed.width / preview_img.width)) if form_boxes else {"objects": []}
+        try:
+            scale = 1.0 / (processed.width / preview_img.width)
+            canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=scale) if form_boxes else {"objects": []}
+        except Exception as e:
+            st.warning(f"⚠️ Canvas box conversion error: {e}")
+            canvas_json = {"objects": []}
 
         st.markdown("### ✏️ Draw or Edit Bounding Boxes")
         canvas_result = st_canvas(
@@ -240,11 +249,14 @@ if uploaded_files:
             scale_y = processed.height / preview_img.height
 
             for obj in canvas_result.json_data["objects"]:
-                x1 = int(obj["left"] * scale_x)
-                y1 = int(obj["top"] * scale_y)
-                x2 = int((obj["left"] + obj["width"]) * scale_x)
-                y2 = int((obj["top"] + obj["height"]) * scale_y)
-                updated_boxes.append((x1, y1, x2, y2))
+                try:
+                    x1 = int(obj["left"] * scale_x)
+                    y1 = int(obj["top"] * scale_y)
+                    x2 = int((obj["left"] + obj["width"]) * scale_x)
+                    y2 = int((obj["top"] + obj["height"]) * scale_y)
+                    updated_boxes.append((x1, y1, x2, y2))
+                except Exception as e:
+                    st.warning(f"⚠️ Failed to read box: {e}")
 
             st.session_state.saved_boxes[file.name] = updated_boxes
 
