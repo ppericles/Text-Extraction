@@ -3,7 +3,7 @@
 # VERSION: 3.7.4
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
-#              bounding box selection, internal layout logic,
+#              bounding box editing, internal layout logic,
 #              OCR via Vision API or Document AI, table parsing,
 #              encrypted multi-profile config, visual overlays,
 #              adaptive trimming toggle, and batch export.
@@ -29,6 +29,28 @@ from utils_layout import (
     draw_layout_overlay
 )
 from utils_parser import process_single_form
+
+# === Helper: Convert Saved Boxes to Canvas Format ===
+def convert_boxes_to_canvas_objects(boxes, scale=1.0):
+    objects = []
+    for box in boxes:
+        x1, y1, x2, y2 = box
+        left = x1 * scale
+        top = y1 * scale
+        width = (x2 - x1) * scale
+        height = (y2 - y1) * scale
+        obj = {
+            "type": "rect",
+            "left": left,
+            "top": top,
+            "width": width,
+            "height": height,
+            "fill": "rgba(255, 0, 0, 0.3)",
+            "stroke": "red",
+            "strokeWidth": 2
+        }
+        objects.append(obj)
+    return {"objects": objects}
 
 # === Page Setup ===
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
@@ -191,19 +213,28 @@ if uploaded_files:
 
         st.image(preview_img, caption="Preview Image", use_column_width=True)
 
-        st.markdown("### ✏️ Draw Bounding Boxes")
+        # === Load existing boxes into canvas ===
+        form_boxes = st.session_state.saved_boxes.get(file.name, [])
+        canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=1.0 / (processed.width / preview_img.width))
+
+        st.markdown("### ✏️ Draw or Edit Bounding Boxes")
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)",
             stroke_width=2,
             background_image=preview_img,
-            update_streamlit=True,
+            initial_drawing=canvas_json,
+            drawing_mode="rect",
+            drawing_mode_selector=True,
+            display_toolbar=True,
+            editable=True,
             height=preview_img.height,
             width=preview_img.width,
-            drawing_mode="rect",
+            update_streamlit=True,
             key=f"canvas_{file.name}"
         )
 
-        form_boxes = []
+        # === Save updated boxes ===
+        updated_boxes = []
         if canvas_result.json_data:
             scale_x = processed.width / preview_img.width
             scale_y = processed.height / preview_img.height
@@ -213,13 +244,11 @@ if uploaded_files:
                 y1 = int(obj["top"] * scale_y)
                 x2 = int((obj["left"] + obj["width"]) * scale_x)
                 y2 = int((obj["top"] + obj["height"]) * scale_y)
-                form_boxes.append((x1, y1, x2, y2))
+                updated_boxes.append((x1, y1, x2, y2))
 
-            st.session_state.saved_boxes[file.name] = form_boxes
+            st.session_state.saved_boxes[file.name] = updated_boxes
 
-        if file.name in st.session_state.saved_boxes:
-            form_boxes = st.session_state.saved_boxes[file.name]
-
+        form_boxes = st.session_state.saved_boxes[file.name]
         st.markdown(f"### 📐 {len(form_boxes)} Form(s) Selected")
 
         parsed_results = []
