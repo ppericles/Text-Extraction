@@ -1,36 +1,16 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.7.7
-# AUTHOR: Pericles & Copilot
-# DESCRIPTION: Registry Form Parser with interactive canvas,
-#              bounding box editing, internal layout logic,
-#              OCR via Vision API or Document AI, table parsing,
-#              encrypted multi-profile config, visual overlays,
-#              adaptive trimming toggle, and batch export.
+# VERSION: 3.7.8
+# MODE: Canvas Debug Harness
+# DESCRIPTION: Standalone canvas test to verify bounding box
+#              drawing, editing, resizing, and deletion.
 # ============================================================
 
 import streamlit as st
 from PIL import Image
-import os, json, tempfile
-from io import BytesIO
 from streamlit_drawable_canvas import st_canvas
-from cryptography.fernet import Fernet
 
-from utils_image import (
-    resize_for_preview,
-    trim_whitespace,
-    adaptive_trim_whitespace,
-    split_zones_fixed,
-    draw_column_breaks,
-    draw_row_breaks
-)
-from utils_layout import (
-    extract_fields_from_layout,
-    draw_layout_overlay
-)
-from utils_parser import process_single_form
-
-# === Helper: Convert Saved Boxes to Canvas Format ===
+# === Helper: Convert Boxes to Canvas Format ===
 def convert_boxes_to_canvas_objects(boxes, scale=1.0):
     try:
         objects = []
@@ -53,160 +33,47 @@ def convert_boxes_to_canvas_objects(boxes, scale=1.0):
             objects.append(obj)
         return {"objects": objects}
     except Exception as e:
-        st.warning(f"⚠️ Failed to convert bounding boxes: {e}")
+        st.warning(f"⚠️ Failed to convert boxes: {e}")
         return {"objects": []}
 
-# === Page Setup ===
-st.set_page_config(page_title="📄 Registry Parser", layout="wide")
-st.title("📄 Registry Form Parser")
+st.set_page_config(page_title="🧪 Canvas Debug", layout="wide")
+st.title("🧪 Canvas Debug Harness")
 
-# === Credential Upload ===
-st.sidebar.markdown("### 🔐 Load Google Credentials")
-cred_file = st.sidebar.file_uploader("Upload JSON credentials", type=["json"])
-if cred_file:
-    temp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-    temp_path.write(cred_file.read())
-    temp_path.close()
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_path.name
-    st.sidebar.success("✅ Credentials loaded.")
-else:
-    st.sidebar.warning("⚠️ OCR disabled — upload a service account JSON.")
+uploaded_file = st.file_uploader("Upload an image to test canvas", type=["png", "jpg", "jpeg"])
+if uploaded_file:
+    image = Image.open(uploaded_file).convert("RGB")
+    preview_img = image.resize((min(image.width, 800), int(image.height * (min(image.width, 800) / image.width))))
 
-# === OCR Engine Selection ===
-st.sidebar.markdown("### 🧠 OCR Engine")
-ocr_engine = st.sidebar.radio("Choose OCR Engine", ["Vision API", "Document AI"])
-use_docai = ocr_engine == "Document AI"
+    st.image(preview_img, caption="Preview Image", use_column_width=True)
 
-# === Encrypted Multi-Profile Config ===
-CONFIG_DIR = "config"
-ENC_PATH = os.path.join(CONFIG_DIR, "processor_config.enc")
-LAST_PATH = os.path.join(CONFIG_DIR, "last_profile.txt")
-KEY_PATH = os.path.join(CONFIG_DIR, "key.txt")
-os.makedirs(CONFIG_DIR, exist_ok=True)
+    # === Load dummy boxes or session boxes ===
+    dummy_boxes = [(50, 50, 200, 150), (300, 100, 450, 250)]
+    scale = 1.0 / (image.width / preview_img.width)
+    canvas_json = convert_boxes_to_canvas_objects(dummy_boxes, scale=scale)
 
-if not os.path.exists(KEY_PATH):
-    key = Fernet.generate_key()
-    open(KEY_PATH, "wb").write(key)
-else:
-    key = open(KEY_PATH, "rb").read()
-fernet = Fernet(key)
+    st.markdown("### ✏️ Draw or Edit Bounding Boxes")
+    canvas_result = st_canvas(
+        background_image=preview_img,
+        initial_drawing=canvas_json,
+        drawing_mode="rect",
+        drawing_mode_selector=True,
+        display_toolbar=True,
+        editable=True,
+        fill_color="rgba(255, 0, 0, 0.3)",
+        stroke_width=2,
+        height=preview_img.height,
+        width=preview_img.width,
+        update_streamlit=True,
+        key="canvas_debug"
+    )
 
-saved_profiles = {}
-if os.path.exists(ENC_PATH):
-    try:
-        encrypted = open(ENC_PATH, "rb").read()
-        decrypted = fernet.decrypt(encrypted).decode()
-        saved_profiles = json.loads(decrypted)
-    except Exception:
-        saved_profiles = {}
-
-default_profile = ""
-if os.path.exists(LAST_PATH):
-    default_profile = open(LAST_PATH).read().strip()
-
-profile_names = list(saved_profiles.keys())
-selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + ["New Profile"], index=profile_names.index(default_profile) if default_profile in profile_names else len(profile_names))
-
-if selected_profile == "New Profile":
-    st.sidebar.markdown("### ➕ Create New Profile")
-    new_name = st.sidebar.text_input("Profile Name")
-    project_id = st.sidebar.text_input("Project ID")
-    location = st.sidebar.text_input("Location")
-    processor_id = st.sidebar.text_input("Processor ID")
-
-    if st.sidebar.button("💾 Save Profile", key="save_profile"):
-        if new_name and project_id and location and processor_id:
-            saved_profiles[new_name] = {
-                "project_id": project_id.strip(),
-                "location": location.strip(),
-                "processor_id": processor_id.strip()
-            }
-            encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
-            open(ENC_PATH, "wb").write(encrypted)
-            open(LAST_PATH, "w").write(new_name)
-            st.sidebar.success(f"✅ Profile `{new_name}` saved.")
-            st.experimental_rerun()
-        else:
-            st.sidebar.error("⚠️ Please fill in all fields before saving.")
-
-    st.sidebar.markdown("### 📋 Auto-Fill Profile")
-    pasted_json = st.sidebar.text_area("Paste JSON", height=100, key="profile_clipboard")
-    if st.sidebar.button("📥 Load from Paste", key="load_from_clipboard"):
-        try:
-            data = json.loads(pasted_json)
-            project_id = data.get("project_id", "")
-            location = data.get("location", "")
-            processor_id = data.get("processor_id", "")
-            if new_name and project_id and location and processor_id:
-                saved_profiles[new_name] = {
-                    "project_id": project_id.strip(),
-                    "location": location.strip(),
-                    "processor_id": processor_id.strip()
-                }
-                encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
-                open(ENC_PATH, "wb").write(encrypted)
-                open(LAST_PATH, "w").write(new_name)
-                st.sidebar.success(f"✅ Profile `{new_name}` loaded and saved.")
-                st.experimental_rerun()
-            else:
-                st.sidebar.warning("⚠️ Missing fields or profile name.")
-        except Exception:
-            st.sidebar.error("❌ Invalid JSON format.")
-
-    uploaded_profile = st.sidebar.file_uploader("Upload Profile JSON", type=["json"], key="profile_file")
-    if uploaded_profile:
-        try:
-            data = json.load(uploaded_profile)
-            project_id = data.get("project_id", "")
-            location = data.get("location", "")
-            processor_id = data.get("processor_id", "")
-            if new_name and project_id and location and processor_id:
-                saved_profiles[new_name] = {
-                    "project_id": project_id.strip(),
-                    "location": location.strip(),
-                    "processor_id": processor_id.strip()
-                }
-                encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
-                open(ENC_PATH, "wb").write(encrypted)
-                open(LAST_PATH, "w").write(new_name)
-                st.sidebar.success(f"✅ Profile `{new_name}` loaded and saved.")
-                st.experimental_rerun()
-            else:
-                st.sidebar.warning("⚠️ Missing fields or profile name.")
-        except Exception:
-            st.sidebar.error("❌ Failed to parse uploaded file.")
-else:
-    profile = saved_profiles.get(selected_profile) or {}
-    if all(k in profile for k in ["project_id", "location", "processor_id"]):
-        st.sidebar.markdown(f"### 📁 Profile: `{selected_profile}`")
-        st.sidebar.text(f"Project ID: {profile['project_id']}")
-        st.sidebar.text(f"Location: {profile['location']}")
-        st.sidebar.text(f"Processor ID: {profile['processor_id']}")
-        docai_config = profile
-        open(LAST_PATH, "w").write(selected_profile)
+    if canvas_result.json_data:
+        st.markdown("### 📦 Canvas Output")
+        st.json(canvas_result.json_data)
     else:
-        st.sidebar.warning("⚠️ Selected profile is incomplete.")
-        docai_config = {}
-
-    if st.sidebar.button("🗑️ Delete Profile", key="delete_profile"):
-        del saved_profiles[selected_profile]
-        encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
-        open(ENC_PATH, "wb").write(encrypted)
-        open(LAST_PATH, "w").write("")
-        st.sidebar.success(f"🗑️ Profile `{selected_profile}` deleted.")
-        st.experimental_rerun()
-
-# === Image Settings ===
-st.sidebar.markdown("### 🖼️ Image Settings")
-use_adaptive_trim = st.sidebar.checkbox("Use Adaptive Trimming", value=True)
-
-# === File Upload ===
-uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
-
-if "saved_boxes" not in st.session_state:
-    st.session_state.saved_boxes = {}
-if "parsed_forms" not in st.session_state:
-    st.session_state.parsed_forms = {}
+        st.info("📝 Draw a box to see output.")
+else:
+    st.info("📤 Upload an image to begin.")
 if uploaded_files:
     for file in uploaded_files:
         st.header(f"📄 `{file.name}` — Select Forms")
@@ -223,7 +90,7 @@ if uploaded_files:
             scale = 1.0 / (processed.width / preview_img.width)
             canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=scale) if form_boxes else {"objects": []}
         except Exception as e:
-            st.warning(f"⚠️ Canvas box conversion error: {e}")
+            st.warning(f"⚠️ Canvas conversion error: {e}")
             canvas_json = {"objects": []}
 
         st.markdown("### ✏️ Draw or Edit Bounding Boxes")
@@ -256,7 +123,7 @@ if uploaded_files:
                     y2 = int((obj["top"] + obj["height"]) * scale_y)
                     updated_boxes.append((x1, y1, x2, y2))
                 except Exception as e:
-                    st.warning(f"⚠️ Failed to read box: {e}")
+                    st.warning(f"⚠️ Error reading box: {e}")
 
             st.session_state.saved_boxes[file.name] = updated_boxes
 
