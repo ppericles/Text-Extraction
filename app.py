@@ -181,7 +181,7 @@ if uploaded_files:
     for file in uploaded_files:
         if file.name not in st.session_state.saved_boxes:
             st.session_state.saved_boxes[file.name] = []
-                    try:
+        try:
             form_boxes = st.session_state.saved_boxes.get(file.name, [])
             scale = 1.0 / (processed.width / preview_img.width)
             canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=scale)
