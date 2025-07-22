@@ -177,10 +177,10 @@ if uploaded_files:
         if file.name not in st.session_state.saved_boxes:
             st.session_state.saved_boxes[file.name] = []
         updated_boxes = []
-        if "canvas_result" in locals() and canvas_result and canvas_result.json_data:
+        if canvas_result and canvas_result.json_data:
             scale_x = processed.width / preview_img.width
             scale_y = processed.height / preview_img.height
-            for obj in canvas_result.json_data["objects"]:
+            for obj in canvas_result.json_data.get("objects", []):
                 try:
                     x1 = int(obj["left"] * scale_x)
                     y1 = int(obj["top"] * scale_y)
