@@ -1,11 +1,12 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.7.0
+# VERSION: 3.7.1
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              bounding box selection, internal layout logic,
 #              OCR via Vision API or Document AI, table parsing,
-#              encrypted multi-profile config, and batch export.
+#              encrypted multi-profile config, visual overlays,
+#              adaptive trimming, and batch export.
 # ============================================================
 
 import streamlit as st
@@ -18,7 +19,10 @@ from cryptography.fernet import Fernet
 from utils_image import (
     resize_for_preview,
     trim_whitespace,
-    split_zones_fixed
+    adaptive_trim_whitespace,
+    split_zones_fixed,
+    draw_column_breaks,
+    draw_row_breaks
 )
 from utils_layout import (
     extract_fields_from_layout,
@@ -131,7 +135,7 @@ if uploaded_files:
         st.header(f"📄 `{file.name}` — Select Forms")
 
         image = Image.open(file).convert("RGB")
-        processed = trim_whitespace(image.copy())
+        processed = adaptive_trim_whitespace(image.copy())
         preview_img = resize_for_preview(image)
 
         st.markdown("### ✏️ Draw Bounding Boxes")
@@ -199,6 +203,11 @@ if uploaded_files:
             overlay = draw_layout_overlay(form_crop, layout)
             st.image(resize_for_preview(overlay), caption="🔍 Layout Overlay", use_column_width=True)
 
+            column_overlay = draw_column_breaks(result["table_crop"], result["column_breaks"])
+            row_overlay = draw_row_breaks(result["table_crop"], rows=10, header=True)
+            st.image(resize_for_preview(column_overlay), caption="📊 Column Breaks", use_column_width=True)
+            st.image(resize_for_preview(row_overlay), caption="📏 Row Breaks", use_column_width=True)
+
             st.markdown("### 🧾 Group A (ΑΡΙΘΜΟΣ ΜΕΡΙΔΟΣ)")
             for label, data in result["group_a"].items():
                 emoji = "🟢" if data["confidence"] >= 90 else "🟡" if data["confidence"] >= 70 else "🔴"
@@ -244,3 +253,28 @@ if uploaded_files:
             }
             batch_json = json.dumps(all_data, indent=2)
             st.download_button("📥 Download All Data", batch_json, file_name=f"{file.name}_all_forms.json")
+
+# === Batch OCR Button ===
+if st.button("🚀 Run Batch OCR on All Files"):
+    for file in uploaded_files:
+        image = Image.open(file).convert("RGB")
+        processed = adaptive_trim_whitespace(image.copy())
+        form_boxes = st.session_state.saved_boxes.get(file.name, [])
+        parsed_results = []
+
+        for i, box in enumerate(form_boxes):
+            x1, y1, x2, y2 = box
+            form_crop = processed.crop((x1, y1, x2, y2))
+            layout = {
+                "master_ratio": 0.5,
+                "group_a_box": [0.0, 0.0, 0.2, 1.0],
+                "group_b_box": [0.2, 0.0, 1.0, 0.5],
+                "detail_box": [0.0, 0.0, 1.0, 1.0],
+                "auto_detect": True
+            }
+            config = docai_config if use_docai else {}
+            result = process_single_form(form_crop, i, config, layout)
+            parsed_results.append(result)
+
+        st.session_state.parsed_forms[file.name] = parsed_results
+    st.success("✅ Batch OCR completed.")
