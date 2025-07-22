@@ -1,11 +1,11 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 2.3.0
+# VERSION: 2.4.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              editable bounding boxes, OCR via Document AI,
 #              fallback Vision API, and table extraction.
-#              Includes preview toggle and improved canvas visibility.
+#              Canvas now matches preview size for better UX.
 # ============================================================
 
 import streamlit as st
@@ -59,11 +59,12 @@ if uploaded_files and all([project_id, location, processor_id]):
 
         original = Image.open(file)
         processed = trim_whitespace(optimize_image(original.copy()))
+        preview_img = resize_for_preview(original)
 
         st.markdown("### 🖼️ Preview Image")
         show_grayscale = st.checkbox("Show grayscale preview", value=False)
-        preview_img = processed if show_grayscale else original
-        st.image(resize_for_preview(preview_img), caption="📄 Preview", use_column_width=True)
+        display_img = resize_for_preview(processed) if show_grayscale else preview_img
+        st.image(display_img, caption="📄 Preview", use_column_width=True)
 
         st.markdown("### ✏️ Bounding Box Editor")
         canvas_mode = st.radio("Canvas Mode", ["Draw", "Edit"], horizontal=True)
@@ -72,10 +73,10 @@ if uploaded_files and all([project_id, location, processor_id]):
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)",
             stroke_width=2,
-            background_image=original,  # ← full-color image for canvas
+            background_image=preview_img,  # ← resized original image
             update_streamlit=True,
-            height=original.height,
-            width=original.width,
+            height=preview_img.height,
+            width=preview_img.width,
             drawing_mode=drawing_mode,
             key=f"canvas_{file.name}"
         )
@@ -83,10 +84,10 @@ if uploaded_files and all([project_id, location, processor_id]):
         form_boxes = []
         if canvas_result.json_data:
             for obj in canvas_result.json_data["objects"]:
-                x1 = obj["left"] / original.width
-                y1 = obj["top"] / original.height
-                x2 = (obj["left"] + obj["width"]) / original.width
-                y2 = (obj["top"] + obj["height"]) / original.height
+                x1 = obj["left"] / preview_img.width
+                y1 = obj["top"] / preview_img.height
+                x2 = (obj["left"] + obj["width"]) / preview_img.width
+                y2 = (obj["top"] + obj["height"]) / preview_img.height
                 form_boxes.append((x1, y1, x2, y2))
 
         st.markdown(f"### 📐 {len(form_boxes)} Form(s) Detected")
