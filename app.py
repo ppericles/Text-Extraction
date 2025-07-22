@@ -1,10 +1,11 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 2.2.0
+# VERSION: 2.3.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              editable bounding boxes, OCR via Document AI,
 #              fallback Vision API, and table extraction.
+#              Includes preview toggle and improved canvas visibility.
 # ============================================================
 
 import streamlit as st
@@ -55,8 +56,14 @@ if uploaded_files and all([project_id, location, processor_id]):
 
     for file in uploaded_files:
         st.header(f"📄 `{file.name}`")
-        image = trim_whitespace(optimize_image(Image.open(file)))
-        st.image(resize_for_preview(image), caption="📄 Full Image", use_column_width=True)
+
+        original = Image.open(file)
+        processed = trim_whitespace(optimize_image(original.copy()))
+
+        st.markdown("### 🖼️ Preview Image")
+        show_grayscale = st.checkbox("Show grayscale preview", value=False)
+        preview_img = processed if show_grayscale else original
+        st.image(resize_for_preview(preview_img), caption="📄 Preview", use_column_width=True)
 
         st.markdown("### ✏️ Bounding Box Editor")
         canvas_mode = st.radio("Canvas Mode", ["Draw", "Edit"], horizontal=True)
@@ -65,10 +72,10 @@ if uploaded_files and all([project_id, location, processor_id]):
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)",
             stroke_width=2,
-            background_image=image,
+            background_image=original,  # ← full-color image for canvas
             update_streamlit=True,
-            height=image.height,
-            width=image.width,
+            height=original.height,
+            width=original.width,
             drawing_mode=drawing_mode,
             key=f"canvas_{file.name}"
         )
@@ -76,10 +83,10 @@ if uploaded_files and all([project_id, location, processor_id]):
         form_boxes = []
         if canvas_result.json_data:
             for obj in canvas_result.json_data["objects"]:
-                x1 = obj["left"] / image.width
-                y1 = obj["top"] / image.height
-                x2 = (obj["left"] + obj["width"]) / image.width
-                y2 = (obj["top"] + obj["height"]) / image.height
+                x1 = obj["left"] / original.width
+                y1 = obj["top"] / original.height
+                x2 = (obj["left"] + obj["width"]) / original.width
+                y2 = (obj["top"] + obj["height"]) / original.height
                 form_boxes.append((x1, y1, x2, y2))
 
         st.markdown(f"### 📐 {len(form_boxes)} Form(s) Detected")
@@ -105,7 +112,7 @@ if uploaded_files and all([project_id, location, processor_id]):
                     table_columns.append((cx1, cx2))
                 layout["table_columns"] = table_columns
 
-            result = process_single_form(image, box, i, config, layout)
+            result = process_single_form(processed, box, i, config, layout)
 
             st.image(resize_for_preview(result["master"]), caption="🟦 Master Zone", use_column_width=True)
 
