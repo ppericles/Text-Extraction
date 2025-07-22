@@ -2,53 +2,58 @@
 # FILE: utils_layout.py
 # VERSION: 1.0
 # AUTHOR: Pericles & Copilot
-# DESCRIPTION: Layout visualization tools for registry parser.
-#              Includes bounding box overlays, column break
-#              visualization, and label rendering.
+# DESCRIPTION: Layout utilities for registry form parsing.
+#              Supports Vision API and Document AI OCR,
+#              confidence scoring, and visual overlays.
 # ============================================================
-from PIL import ImageDraw, ImageFont
 
-# === Draw bounding boxes on image ===
-def draw_boxes(img, boxes, color="red", width=2):
-    draw = ImageDraw.Draw(img)
+from PIL import Image, ImageDraw
+from utils_ocr import vision_api_ocr, form_parser_ocr
+
+def extract_fields_from_layout(img: Image.Image, layout: dict, engine="vision", config=None) -> dict:
+    """Extract text and confidence from layout boxes."""
     w, h = img.size
-    for box in boxes:
+    results = {}
+
+    for label, box in layout.items():
         x1, y1, x2, y2 = box
-        draw.rectangle(
-            [int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h)],
-            outline=color,
-            width=width
-        )
-    return img
+        left = int(x1 * w)
+        top = int(y1 * h)
+        right = int(x2 * w)
+        bottom = int(y2 * h)
 
-# === Draw vertical column breaks ===
-def draw_column_breaks(img, column_breaks, color="blue", width=2):
-    draw = ImageDraw.Draw(img)
+        crop = img.crop((left, top, right, bottom))
+
+        if engine == "documentai" and config:
+            fields = form_parser_ocr(crop, **config)
+            best = max(fields, key=lambda f: f.get("confidence", 0), default={})
+            results[label] = {
+                "value": best.get("value", ""),
+                "confidence": best.get("confidence", 0)
+            }
+        else:
+            text = vision_api_ocr(crop).strip()
+            results[label] = {
+                "value": text,
+                "confidence": 100  # Vision API doesn't return confidence
+            }
+
+    return results
+
+def draw_layout_overlay(img: Image.Image, layout: dict) -> Image.Image:
+    """Draw rectangles and labels over layout fields."""
+    overlay = img.copy()
+    draw = ImageDraw.Draw(overlay)
     w, h = img.size
-    for x1, _ in column_breaks:
-        x = int(x1 * w)
-        draw.line([(x, 0), (x, h)], fill=color, width=width)
-    return img
 
-# === Overlay labels and confidence scores ===
-def draw_labels(img, fields, box, font_size=14):
-    draw = ImageDraw.Draw(img)
-    w, h = img.size
-    x1, y1, x2, y2 = box
-    zone_w = int((x2 - x1) * w)
-    zone_h = int((y2 - y1) * h)
-    zone_x = int(x1 * w)
-    zone_y = int(y1 * h)
+    for label, box in layout.items():
+        x1, y1, x2, y2 = box
+        left = int(x1 * w)
+        top = int(y1 * h)
+        right = int(x2 * w)
+        bottom = int(y2 * h)
 
-    try:
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except:
-        font = ImageFont.load_default()
+        draw.rectangle([left, top, right, bottom], outline="green", width=2)
+        draw.text((left + 3, top + 3), label, fill="green")
 
-    y_offset = zone_y + 5
-    for label, data in fields.items():
-        text = f"{label}: {data['value']} ({data['confidence']}%)"
-        draw.text((zone_x + 5, y_offset), text, fill="black", font=font)
-        y_offset += font_size + 4
-
-    return img
+    return overlay
