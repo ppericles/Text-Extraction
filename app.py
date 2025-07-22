@@ -1,12 +1,11 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 2.8.0
+# VERSION: 2.9.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              editable bounding boxes, OCR via Document AI,
 #              fallback Vision API, and table extraction.
-#              Bounding box coordinates now scale correctly
-#              from canvas to full-resolution image.
+#              Cropping now uses absolute pixel coordinates.
 # ============================================================
 
 import streamlit as st
@@ -98,17 +97,12 @@ if uploaded_files and all([project_id, location, processor_id]):
             scale_y = processed.height / preview_img.height
 
             for obj in new_data["objects"]:
-                px1 = obj["left"]
-                py1 = obj["top"]
-                px2 = obj["left"] + obj["width"]
-                py2 = obj["top"] + obj["height"]
-
-                fx1 = px1 * scale_x / processed.width
-                fy1 = py1 * scale_y / processed.height
-                fx2 = px2 * scale_x / processed.width
-                fy2 = py2 * scale_y / processed.height
-
-                form_boxes.append((fx1, fy1, fx2, fy2))
+                # Absolute pixel coordinates for full-res image
+                x1 = int(obj["left"] * scale_x)
+                y1 = int(obj["top"] * scale_y)
+                x2 = int((obj["left"] + obj["width"]) * scale_x)
+                y2 = int((obj["top"] + obj["height"]) * scale_y)
+                form_boxes.append((x1, y1, x2, y2))
 
         st.markdown(f"### 📐 {len(form_boxes)} Form(s) Detected")
 
@@ -133,7 +127,15 @@ if uploaded_files and all([project_id, location, processor_id]):
                     table_columns.append((cx1, cx2))
                 layout["table_columns"] = table_columns
 
+            # === Crop using absolute pixel coordinates ===
+            x1, y1, x2, y2 = box
+            form_crop = processed.crop((x1, y1, x2, y2))
+            zones, _ = split_zones_fixed(form_crop, layout.get("master_ratio", 0.5))
+            master_zone, detail_zone = zones
+
             result = process_single_form(processed, box, i, config, layout)
+            result["master"] = master_zone
+            result["detail"] = detail_zone
 
             st.image(resize_for_preview(result["master"]), caption="🟦 Master Zone", use_column_width=True)
 
