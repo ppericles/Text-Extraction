@@ -97,6 +97,7 @@ profile_names = list(saved_profiles.keys())
 selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + ["New Profile"],
     index=profile_names.index(default_profile) if default_profile in profile_names else len(profile_names)
 )
+# === Profile Management ===
 if selected_profile == "New Profile":
     st.sidebar.markdown("### ➕ Create New Profile")
     new_name = st.sidebar.text_input("Profile Name")
@@ -187,37 +188,44 @@ if uploaded_files:
             st.error(f"❌ Failed to process or preview image: {e}")
             continue
 
-        form_boxes = st.session_state.saved_boxes.get(file.name, [])
+        # === Bounding Box Editor UI ===
+        st.markdown("### ✏️ Bounding Box Editor")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🖊️ Draw New Boxes", key=f"btn_draw_{file.name}"):
+                st.session_state[f"drawing_mode_{file.name}"] = "rect"
+        with col2:
+            if st.button("🔧 Resize / Move Boxes", key=f"btn_edit_{file.name}"):
+                st.session_state[f"drawing_mode_{file.name}"] = "transform"
+
+        drawing_mode = st.session_state.get(f"drawing_mode_{file.name}", "rect")
 
         try:
-            scale = 1.0 / (processed.width / preview_img.width)
-            canvas_json = convert_boxes_to_canvas_objects(form_boxes, scale=scale)
-        except Exception as e:
-            st.warning(f"⚠️ Canvas conversion error: {e}")
-            canvas_json = {"objects": []}
-
-        st.markdown("### ✏️ Draw or Edit Bounding Boxes")
-        mode = st.selectbox("✏️ Drawing Mode", ["rect", "circle", "line", "freedraw", "transform"], key=f"mode_{file.name}")
-        canvas_result = None
-        try:
-            canvas_result = st_canvas(
-                background_image=preview_img,
-                initial_drawing=canvas_json,
-                drawing_mode=mode,
-                display_toolbar=True,
-                fill_color="rgba(255, 0, 0, 0.3)",
-                stroke_width=2,
-                height=preview_img.height,
-                width=preview_img.width,
-                update_streamlit=True,
-                key=f"canvas_{file.name}"
+            scale_factor = 1.0 / (processed.width / preview_img.width)
+            canvas_json = convert_boxes_to_canvas_objects(
+                st.session_state.saved_boxes.get(file.name, []),
+                scale=scale_factor
             )
         except Exception as e:
-            st.error(f"❌ Failed to render canvas: {e}")
-            continue
+            st.warning(f"⚠️ Error preparing drawing objects: {e}")
+            canvas_json = {"objects": []}
+
+        canvas_result = st_canvas(
+            background_image=preview_img,
+            initial_drawing=canvas_json,
+            drawing_mode=drawing_mode,
+            display_toolbar=True,
+            fill_color="rgba(255, 0, 0, 0.3)",
+            stroke_width=2,
+            height=preview_img.height,
+            width=preview_img.width,
+            update_streamlit=True,
+            key=f"canvas_{file.name}"
+        )
 
         updated_boxes = []
-        if "canvas_result" in locals() and canvas_result and canvas_result.json_data:
+        if canvas_result and canvas_result.json_data:
             scale_x = processed.width / preview_img.width
             scale_y = processed.height / preview_img.height
             for obj in canvas_result.json_data.get("objects", []):
@@ -228,9 +236,8 @@ if uploaded_files:
                     y2 = int((obj["top"] + obj["height"]) * scale_y)
                     updated_boxes.append((x1, y1, x2, y2))
                 except Exception as e:
-                    st.warning(f"⚠️ Error extracting box: {e}")
+                    st.warning(f"⚠️ Could not convert box: {e}")
             st.session_state.saved_boxes[file.name] = updated_boxes
-
         form_boxes = st.session_state.saved_boxes.get(file.name, [])
         parsed_results = []
 
@@ -265,33 +272,6 @@ if uploaded_files:
             st.image(resize_for_preview(draw_layout_overlay(form_crop, layout)), caption="🔍 Layout Overlay", use_column_width=True)
             st.image(resize_for_preview(draw_column_breaks(result["table_crop"], result["column_breaks"])), caption="📊 Column Breaks", use_column_width=True)
             st.image(resize_for_preview(draw_row_breaks(result["table_crop"], rows=10, header=True)), caption="📏 Row Breaks", use_column_width=True)
-
-            st.markdown("### 🧾 Group A")
-            for label, data in result["group_a"].items():
-                emoji = "🟢" if data["confidence"] >= 90 else "🟡" if data["confidence"] >= 70 else "🔴"
-                st.text(f"{emoji} {label}: {data['value']} ({data['confidence']}%)")
-
-            st.markdown("### 🧾 Group B")
-            for label, data in result["group_b"].items():
-                emoji = "🟢" if data["confidence"] >= 90 else "🟡" if data["confidence"] >= 70 else "🔴"
-                st.text(f"{emoji} {label}: {data['value']} ({data['confidence']}%)")
-
-            st.markdown("### 📊 Parsed Table Rows")
-            if result["table_rows"]:
-                st.dataframe(result["table_rows"], use_container_width=True)
-            else:
-                st.warning("⚠️ No table rows extracted.")
-
-            st.download_button("📥 Download Layout JSON", json.dumps(layout, indent=2), file_name=f"form_{i+1}_layout.json")
-            buffer = BytesIO()
-            form_crop.save(buffer, format="PNG")
-            st.download_button("🖼️ Download Cropped Form", buffer.getvalue(), file_name=f"form_{i+1}.png")
-            st.download_button("📤 Download Parsed Data", json.dumps({
-                "group_a": result["group_a"],
-                "group_b": result["group_b"],
-                "table_rows": result["table_rows"]
-            }, indent=2), file_name=f"form_{i+1}_data.json")
-
         st.session_state.parsed_forms[file.name] = parsed_results
 
         st.markdown("## 📦 Export All Forms")
