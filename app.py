@@ -1,12 +1,12 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.7.1
+# VERSION: 3.7.2
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              bounding box selection, internal layout logic,
 #              OCR via Vision API or Document AI, table parsing,
 #              encrypted multi-profile config, visual overlays,
-#              adaptive trimming, and batch export.
+#              adaptive trimming, and batch export with progress.
 # ============================================================
 
 import streamlit as st
@@ -302,8 +302,13 @@ if uploaded_files:
             batch_json = json.dumps(all_data, indent=2)
             st.download_button("📥 Download All Data", batch_json, file_name=f"{file.name}_all_forms.json")
 
-# === Batch OCR Button ===
+# === Batch OCR with Progress Indicator ===
 if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
+    total_forms = sum(len(st.session_state.saved_boxes.get(f.name, [])) for f in uploaded_files)
+    progress = st.progress(0, text="Processing forms...")
+    completed = 0
+    st.session_state.parsed_forms = {}
+
     for file in uploaded_files:
         image = Image.open(file).convert("RGB")
         processed = adaptive_trim_whitespace(image.copy())
@@ -324,5 +329,10 @@ if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
             result = process_single_form(form_crop, i, config, layout)
             parsed_results.append(result)
 
+            completed += 1
+            progress.progress(completed / total_forms, text=f"Processed {completed} of {total_forms} forms")
+
         st.session_state.parsed_forms[file.name] = parsed_results
+
+    progress.empty()
     st.success("✅ Batch OCR completed.")
