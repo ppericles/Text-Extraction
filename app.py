@@ -16,6 +16,7 @@ from streamlit_drawable_canvas import st_canvas
 from utils_ocr import form_parser_ocr, match_fields_with_fallback, vision_api_ocr
 from utils_image import optimize_image, resize_for_preview, trim_whitespace, split_zones_fixed
 from utils_layout import draw_boxes, draw_column_breaks
+from utils_parser import process_single_form
 
 # === Config Setup ===
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
