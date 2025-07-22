@@ -190,7 +190,7 @@ if uploaded_files:
             canvas_json = {"objects": []}
 
         st.markdown("### ✏️ Draw or Edit Bounding Boxes")
-        try:
+    try:
             canvas_result = st_canvas(
                 background_image=preview_img,
                 initial_drawing=canvas_json,
@@ -205,7 +205,7 @@ if uploaded_files:
                 update_streamlit=True,
                 key=f"canvas_{file.name}"
             )
-        except Exception as e:
+    except Exception as e:
             st.error(f"❌ Canvas rendering failed: {e}")
             st.stop()
 
