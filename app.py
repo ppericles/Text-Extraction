@@ -16,7 +16,6 @@ from streamlit_drawable_canvas import st_canvas
 
 from utils_image import (
     resize_for_preview,
-    draw_layout_overlay,
     split_zones_fixed,
     trim_whitespace
 )
