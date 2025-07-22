@@ -1,11 +1,11 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 2.4.0
+# VERSION: 2.5.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              editable bounding boxes, OCR via Document AI,
 #              fallback Vision API, and table extraction.
-#              Canvas now matches preview size for better UX.
+#              Includes per-form refresh to update crops.
 # ============================================================
 
 import streamlit as st
@@ -74,7 +74,7 @@ if uploaded_files and all([project_id, location, processor_id]):
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)",
             stroke_width=2,
-            background_image=preview_img,  # ← resized original image
+            background_image=preview_img,
             update_streamlit=True,
             height=preview_img.height,
             width=preview_img.width,
@@ -95,6 +95,9 @@ if uploaded_files and all([project_id, location, processor_id]):
 
         for i, box in enumerate(form_boxes):
             st.subheader(f"🔍 Form {i+1} Results")
+
+            if st.button(f"🔄 Refresh Form {i+1}", key=f"refresh_{i}"):
+                st.experimental_rerun()
 
             auto = st.checkbox("Auto-detect table columns", value=True, key=f"auto_{i}")
             layout = {
