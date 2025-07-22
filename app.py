@@ -1,11 +1,11 @@
 # ============================================================
 # FILE: app.py
-# VERSION: 3.6.0
+# VERSION: 3.7.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with interactive canvas,
 #              bounding box selection, internal layout logic,
 #              OCR via Vision API or Document AI, table parsing,
-#              multi-profile config, and batch export.
+#              encrypted multi-profile config, and batch export.
 # ============================================================
 
 import streamlit as st
@@ -13,6 +13,7 @@ from PIL import Image
 import os, json, tempfile
 from io import BytesIO
 from streamlit_drawable_canvas import st_canvas
+from cryptography.fernet import Fernet
 
 from utils_image import (
     resize_for_preview,
@@ -46,20 +47,35 @@ st.sidebar.markdown("### 🧠 OCR Engine")
 ocr_engine = st.sidebar.radio("Choose OCR Engine", ["Vision API", "Document AI"])
 use_docai = ocr_engine == "Document AI"
 
-# === Multi-Profile Document AI Config ===
+# === Encrypted Multi-Profile Config ===
 CONFIG_DIR = "config"
-CONFIG_PATH = os.path.join(CONFIG_DIR, "processor_config.json")
+ENC_PATH = os.path.join(CONFIG_DIR, "processor_config.enc")
+LAST_PATH = os.path.join(CONFIG_DIR, "last_profile.txt")
+KEY_PATH = os.path.join(CONFIG_DIR, "key.txt")
 os.makedirs(CONFIG_DIR, exist_ok=True)
 
+if not os.path.exists(KEY_PATH):
+    key = Fernet.generate_key()
+    open(KEY_PATH, "wb").write(key)
+else:
+    key = open(KEY_PATH, "rb").read()
+fernet = Fernet(key)
+
 saved_profiles = {}
-if os.path.exists(CONFIG_PATH):
+if os.path.exists(ENC_PATH):
     try:
-        saved_profiles = json.load(open(CONFIG_PATH))
+        encrypted = open(ENC_PATH, "rb").read()
+        decrypted = fernet.decrypt(encrypted).decode()
+        saved_profiles = json.loads(decrypted)
     except Exception:
         saved_profiles = {}
 
+default_profile = ""
+if os.path.exists(LAST_PATH):
+    default_profile = open(LAST_PATH).read().strip()
+
 profile_names = list(saved_profiles.keys())
-selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + ["New Profile"])
+selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + ["New Profile"], index=profile_names.index(default_profile) if default_profile in profile_names else len(profile_names))
 
 if selected_profile == "New Profile":
     st.sidebar.markdown("### ➕ Create New Profile")
@@ -68,27 +84,40 @@ if selected_profile == "New Profile":
     location = st.sidebar.text_input("Location")
     processor_id = st.sidebar.text_input("Processor ID")
 
-    if st.sidebar.button("💾 Save Profile") and new_name:
+    if st.sidebar.button("💾 Save Profile") and new_name and project_id and location and processor_id:
         saved_profiles[new_name] = {
             "project_id": project_id.strip(),
             "location": location.strip(),
             "processor_id": processor_id.strip()
         }
-        json.dump(saved_profiles, open(CONFIG_PATH, "w"), indent=2)
+        encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
+        open(ENC_PATH, "wb").write(encrypted)
+        open(LAST_PATH, "w").write(new_name)
         st.sidebar.success(f"✅ Profile `{new_name}` saved.")
         st.experimental_rerun()
+    elif st.sidebar.button("💾 Save Profile"):
+        st.sidebar.error("⚠️ Please fill in all fields before saving.")
+    docai_config = {}
 else:
-    st.sidebar.markdown(f"### 📁 Profile: `{selected_profile}`")
-    profile = saved_profiles.get(selected_profile, {})
-    project_id = profile.get("project_id", "")
-    location = profile.get("location", "")
-    processor_id = profile.get("processor_id", "")
+    profile = saved_profiles.get(selected_profile) or {}
+    if all(k in profile for k in ["project_id", "location", "processor_id"]):
+        st.sidebar.markdown(f"### 📁 Profile: `{selected_profile}`")
+        st.sidebar.text(f"Project ID: {profile['project_id']}")
+        st.sidebar.text(f"Location: {profile['location']}")
+        st.sidebar.text(f"Processor ID: {profile['processor_id']}")
+        docai_config = profile
+        open(LAST_PATH, "w").write(selected_profile)
+    else:
+        st.sidebar.warning("⚠️ Selected profile is incomplete.")
+        docai_config = {}
 
-docai_config = {
-    "project_id": project_id,
-    "location": location,
-    "processor_id": processor_id
-}
+    if st.sidebar.button("🗑️ Delete Profile"):
+        del saved_profiles[selected_profile]
+        encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
+        open(ENC_PATH, "wb").write(encrypted)
+        open(LAST_PATH, "w").write("")
+        st.sidebar.success(f"🗑️ Profile `{selected_profile}` deleted.")
+        st.experimental_rerun()
 
 # === File Upload ===
 uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
