@@ -1,6 +1,11 @@
+# ============================================================
 # FILE: utils_image.py
-# Description: Image utilities for registry parser
-# Version: 1.2
+# VERSION: 1.2
+# AUTHOR: Pericles & Copilot
+# DESCRIPTION: Image preprocessing tools for registry parser.
+#              Includes trimming, sharpening, resizing, and
+#              zone splitting for master/detail layout.
+# ============================================================
 
 from PIL import Image, ImageOps, ImageEnhance
 import numpy as np
