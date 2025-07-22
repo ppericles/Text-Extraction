@@ -88,20 +88,68 @@ if selected_profile == "New Profile":
     location = st.sidebar.text_input("Location")
     processor_id = st.sidebar.text_input("Processor ID")
 
-    if st.sidebar.button("💾 Save Profile") and new_name and project_id and location and processor_id:
-        saved_profiles[new_name] = {
-            "project_id": project_id.strip(),
-            "location": location.strip(),
-            "processor_id": processor_id.strip()
-        }
-        encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
-        open(ENC_PATH, "wb").write(encrypted)
-        open(LAST_PATH, "w").write(new_name)
-        st.sidebar.success(f"✅ Profile `{new_name}` saved.")
-        st.experimental_rerun()
-    elif st.sidebar.button("💾 Save Profile"):
-        st.sidebar.error("⚠️ Please fill in all fields before saving.")
-    docai_config = {}
+    if st.sidebar.button("💾 Save Profile", key="save_profile"):
+        if new_name and project_id and location and processor_id:
+            saved_profiles[new_name] = {
+                "project_id": project_id.strip(),
+                "location": location.strip(),
+                "processor_id": processor_id.strip()
+            }
+            encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
+            open(ENC_PATH, "wb").write(encrypted)
+            open(LAST_PATH, "w").write(new_name)
+            st.sidebar.success(f"✅ Profile `{new_name}` saved.")
+            st.experimental_rerun()
+        else:
+            st.sidebar.error("⚠️ Please fill in all fields before saving.")
+
+    # === Auto-Fill from Clipboard or File ===
+    st.sidebar.markdown("### 📋 Auto-Fill Profile")
+    pasted_json = st.sidebar.text_area("Paste JSON", height=100, key="profile_clipboard")
+    if st.sidebar.button("📥 Load from Paste", key="load_from_clipboard"):
+        try:
+            data = json.loads(pasted_json)
+            project_id = data.get("project_id", "")
+            location = data.get("location", "")
+            processor_id = data.get("processor_id", "")
+            if new_name and project_id and location and processor_id:
+                saved_profiles[new_name] = {
+                    "project_id": project_id.strip(),
+                    "location": location.strip(),
+                    "processor_id": processor_id.strip()
+                }
+                encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
+                open(ENC_PATH, "wb").write(encrypted)
+                open(LAST_PATH, "w").write(new_name)
+                st.sidebar.success(f"✅ Profile `{new_name}` loaded and saved.")
+                st.experimental_rerun()
+            else:
+                st.sidebar.warning("⚠️ Missing fields or profile name.")
+        except Exception:
+            st.sidebar.error("❌ Invalid JSON format.")
+
+    uploaded_profile = st.sidebar.file_uploader("Upload Profile JSON", type=["json"], key="profile_file")
+    if uploaded_profile:
+        try:
+            data = json.load(uploaded_profile)
+            project_id = data.get("project_id", "")
+            location = data.get("location", "")
+            processor_id = data.get("processor_id", "")
+            if new_name and project_id and location and processor_id:
+                saved_profiles[new_name] = {
+                    "project_id": project_id.strip(),
+                    "location": location.strip(),
+                    "processor_id": processor_id.strip()
+                }
+                encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
+                open(ENC_PATH, "wb").write(encrypted)
+                open(LAST_PATH, "w").write(new_name)
+                st.sidebar.success(f"✅ Profile `{new_name}` loaded and saved.")
+                st.experimental_rerun()
+            else:
+                st.sidebar.warning("⚠️ Missing fields or profile name.")
+        except Exception:
+            st.sidebar.error("❌ Failed to parse uploaded file.")
 else:
     profile = saved_profiles.get(selected_profile) or {}
     if all(k in profile for k in ["project_id", "location", "processor_id"]):
@@ -115,7 +163,7 @@ else:
         st.sidebar.warning("⚠️ Selected profile is incomplete.")
         docai_config = {}
 
-    if st.sidebar.button("🗑️ Delete Profile"):
+    if st.sidebar.button("🗑️ Delete Profile", key="delete_profile"):
         del saved_profiles[selected_profile]
         encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
         open(ENC_PATH, "wb").write(encrypted)
@@ -242,7 +290,7 @@ if uploaded_files:
         st.session_state.parsed_forms[file.name] = parsed_results
 
         st.markdown("## 📦 Export All Forms")
-        if st.button("📤 Export All Parsed Data"):
+        if st.button("📤 Export All Parsed Data", key=f"export_all_{file.name}"):
             all_data = {
                 f"form_{i+1}": {
                     "group_a": r["group_a"],
@@ -255,7 +303,7 @@ if uploaded_files:
             st.download_button("📥 Download All Data", batch_json, file_name=f"{file.name}_all_forms.json")
 
 # === Batch OCR Button ===
-if st.button("🚀 Run Batch OCR on All Files"):
+if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
     for file in uploaded_files:
         image = Image.open(file).convert("RGB")
         processed = adaptive_trim_whitespace(image.copy())
