@@ -205,7 +205,6 @@ if uploaded_files:
                 initial_drawing=canvas_json,
                 drawing_mode=mode,
                 display_toolbar=True,
-                editable=True,
                 fill_color="rgba(255, 0, 0, 0.3)",
                 stroke_width=2,
                 height=preview_img.height,
