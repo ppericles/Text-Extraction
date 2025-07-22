@@ -3,24 +3,28 @@ streamlit==1.31.0                  # UI interface
 streamlit-drawable-canvas==0.9.2   # Interactive + editable bounding boxes
 
 # ==== OCR and AI Services ====
-google-cloud-documentai==2.18.0    # Fallback: avoids universe_domain error
+google-cloud-documentai==2.18.0    # Document AI fallback (avoids universe_domain error)
 google-cloud-vision==3.4.0         # Vision API fallback OCR
+google-cloud-core>=2.3.2           # Core client for Google APIs (optional but recommended)
 
 # ==== Image & Data Processing ====
 pillow==10.2.0                     # Image manipulation
-opencv-python==4.9.0.80           # Image preprocessing (column detection)
-numpy==1.26.4                     # Array ops for clustering
-pandas==2.2.1                     # Tabular display of parsed rows
+opencv-python==4.9.0.80            # Image preprocessing (column detection)
+numpy==1.26.4                      # Array ops for clustering
+pandas==2.2.1                      # Tabular display of parsed rows
 
 # ==== Unicode Support ====
-unicodedata2==15.1.0              # Greek script normalization
+unicodedata2==15.1.0               # Greek script normalization
 
 # ==== Optional Tools ====
-streamlit-cropper==0.2.1          # Drag-based cropping (experimental)
+streamlit-cropper==0.2.1           # Drag-based cropping (experimental)
 
 # ==== Google SDK Essentials ====
-google-auth==2.20.0               # Compatible with Document AI fallback
-protobuf==4.23.4                  # Matches gcloud SDK expectations
+google-auth==2.20.0                # Compatible with Document AI fallback
+protobuf==4.23.4                   # Matches gcloud SDK expectations
+
+# ==== Encryption Support ====
+cryptography==41.0.0               # Encrypted profile storage (Fernet)
 
 # ==== Python Compatibility ====
 # Tested with Python 3.11
