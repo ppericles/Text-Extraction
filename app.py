@@ -165,11 +165,16 @@ if uploaded_files:
             layout = auto_detect_layout(clean, use_docai=use_docai, config=docai_config)
 
             # === Refine Layout Zones
-            layout, overlay = refine_layout_with_zones(layout, boxes, clean, manual=manual_split, form_id=form_id)
-            st.image(resize_for_preview(overlay), caption="🧠 Refined Layout Zones", use_column_width=True)
+            layout, overlay = refine_layout_with_zones(layout, boxes, clean, manual=False, form_id=form_id)
+
+            # === Show auto overlay unless manual mode is active
+            manual_mode_key = f"manual_mode_{form_id}"
+            if not st.session_state.get(manual_mode_key, False):
+                st.image(resize_for_preview(overlay), caption="🧠 Auto Layout Overlay", use_column_width=True)
 
             # === Manual adjustment toggle
             if st.checkbox("🛠️ Adjust layout manually", key=f"manual_toggle_{form_id}"):
+                st.session_state[manual_mode_key] = True
                 st.markdown("### 🔧 Manual Layout Editor")
 
                 def slider_box(label, default):
@@ -179,16 +184,16 @@ if uploaded_files:
                     y2 = st.slider(f"{label} y2", y1 + 0.01, 1.0, default[3], 0.01, key=f"{form_id}_{label}_y2")
                     return [x1, y1, x2, y2]
 
-            layout["master_box"] = slider_box("Master", layout.get("master_box", [0.0, 0.0, 1.0, 0.5]))
-            layout["group_a_box"] = slider_box("Group A", layout.get("group_a_box", [0.0, 0.0, 1.0, 0.25]))
-            layout["group_b_box"] = slider_box("Group B", layout.get("group_b_box", [0.0, 0.25, 1.0, 0.5]))
-            layout["detail_box"] = slider_box("Detail", layout.get("detail_box", [0.0, 0.5, 1.0, 1.0]))
-            layout["detail_top_box"] = slider_box("Detail Top", layout.get("detail_top_box", [0.0, 0.5, 1.0, 0.75]))
-            layout["detail_bottom_box"] = slider_box("Detail Bottom", layout.get("detail_bottom_box", [0.0, 0.75, 1.0, 1.0]))
+                layout["master_box"] = slider_box("Master", layout.get("master_box", [0.0, 0.0, 1.0, 0.5]))
+                layout["group_a_box"] = slider_box("Group A", layout.get("group_a_box", [0.0, 0.0, 1.0, 0.25]))
+                layout["group_b_box"] = slider_box("Group B", layout.get("group_b_box", [0.0, 0.25, 1.0, 0.5]))
+                layout["detail_box"] = slider_box("Detail", layout.get("detail_box", [0.0, 0.5, 1.0, 1.0]))
+                layout["detail_top_box"] = slider_box("Detail Top", layout.get("detail_top_box", [0.0, 0.5, 1.0, 0.75]))
+                layout["detail_bottom_box"] = slider_box("Detail Bottom", layout.get("detail_bottom_box", [0.0, 0.75, 1.0, 1.0]))
 
             # === Regenerate overlay from updated layout
             manual_overlay = draw_layout_overlay(clean.copy(), layout)
-            st.image(resize_for_preview(manual_overlay), caption="🖍️ Adjusted Layout Overlay", use_column_width=True)
+            st.image(resize_for_preview(manual_overlay), caption="🖍️ Manual Layout Overlay", use_column_width=True)
 
             # === Final overlay with toggles
             draw_zone_overlay(clean, layout, form_id)
