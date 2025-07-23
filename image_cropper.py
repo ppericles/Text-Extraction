@@ -1,39 +1,48 @@
 # =============================================================================
 # FILE: image_cropper.py
-# VERSION: 1.0
+# VERSION: 1.2
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Interactive cropping and layout zone visualization.
-#              Supports multi-form extraction and layout overlays.
+#              Uses st_cropper with zoom support for precision selection.
 # =============================================================================
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
+from streamlit_cropper import st_cropper
 
 # === Interactive Cropping ===
 def crop_and_confirm_forms(image: Image.Image, max_crops=5) -> list:
     """
-    Allows user to crop multiple regions from the uploaded image.
-    Returns list of confirmed cropped form images.
+    Allows user to interactively crop multiple regions from the image.
+    Includes zoom slider for precision. Returns list of confirmed cropped images.
     """
     st.markdown("### ✂️ Crop Forms from Image")
-    w, h = image.size
-    crops = []
+    confirmed = []
 
     for i in range(max_crops):
         st.markdown(f"#### Crop Region {i+1}")
-        x1 = st.slider(f"x1 [{i+1}]", 0, w - 1, 0, 1)
-        y1 = st.slider(f"y1 [{i+1}]", 0, h - 1, 0, 1)
-        x2 = st.slider(f"x2 [{i+1}]", x1 + 1, w, w, 1)
-        y2 = st.slider(f"y2 [{i+1}]", y1 + 1, h, h, 1)
+
+        zoom = st.slider(f"🔍 Zoom Level {i+1}", 0.5, 3.0, 1.0, 0.1, key=f"zoom_{i}")
+
+        cropped_img = st_cropper(
+            image,
+            box_color="blue",
+            aspect_ratio=None,
+            return_type="image",
+            key=f"crop_{i}",
+            realtime_update=True,
+            box_algorithm="zoom",
+            crop_box_mode="manual",
+            zoom=zoom
+        )
 
         if st.button(f"✅ Confirm Crop {i+1}"):
-            cropped = image.crop((x1, y1, x2, y2))
-            crops.append(cropped)
-            st.image(cropped, caption=f"🧾 Cropped Form {i+1}", use_column_width=True)
+            confirmed.append(cropped_img)
+            st.image(cropped_img, caption=f"🧾 Cropped Form {i+1}", use_column_width=True)
 
-    if not crops:
-        st.warning("⚠️ No crops confirmed yet.")
-    return crops
+    if not confirmed:
+        st.info("ℹ️ No crops confirmed yet.")
+    return confirmed
 
 # === Layout Zone Overlay ===
 def draw_zone_overlay(image: Image.Image, layout: dict, form_id: str):
