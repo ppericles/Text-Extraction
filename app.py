@@ -1,9 +1,10 @@
 # =============================================================================
 # FILE: app.py
-# VERSION: 3.9.0
+# VERSION: 4.0.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Streamlit Registry Parser with canvas editing,
-#              manual OCR, layout overlays, and export.
+#              Document AI profile management, layout overlays,
+#              and manual OCR triggering.
 # =============================================================================
 
 import streamlit as st
@@ -15,7 +16,6 @@ from cryptography.fernet import Fernet
 from utils_image import (
     resize_for_preview,
     trim_whitespace,
-    adaptive_trim_whitespace,
     draw_column_breaks,
     draw_row_breaks
 )
@@ -76,7 +76,7 @@ st.sidebar.markdown("### 🧠 OCR Engine")
 ocr_engine = st.sidebar.radio("Choose OCR Engine", ["Vision API", "Document AI"])
 use_docai = ocr_engine == "Document AI"
 
-# === Profile Management ===
+# === Document AI Profile Management ===
 CONFIG_DIR = "config"
 ENC_PATH = os.path.join(CONFIG_DIR, "processor_config.enc")
 LAST_PATH = os.path.join(CONFIG_DIR, "last_profile.txt")
@@ -169,10 +169,6 @@ else:
         st.sidebar.success(f"🗑️ Profile `{selected_profile}` deleted.")
         st.experimental_rerun()
 
-# === Image Settings ===
-st.sidebar.markdown("### 🖼️ Image Settings")
-use_adaptive_trim = st.sidebar.checkbox("Use Adaptive Trimming", value=True)
-
 # === File Upload ===
 uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
@@ -188,7 +184,7 @@ if uploaded_files:
 
         try:
             image_raw = Image.open(file).convert("RGB")
-            processed = adaptive_trim_whitespace(image_raw.copy()) if use_adaptive_trim else trim_whitespace(image_raw.copy())
+            processed = trim_whitespace(image_raw.copy())
             preview_img = resize_for_preview(processed)
             st.image(preview_img, caption="Preview Image", use_column_width=True)
         except Exception as e:
@@ -238,7 +234,7 @@ if uploaded_files:
                 except Exception as e:
                     st.warning(f"⚠️ Could not convert box: {e}")
 
-            boxes_changed = update_boxes_if_changed(file.name, updated_boxes)
+            update_boxes_if_changed(file.name, updated_boxes)
 
         form_boxes = st.session_state.saved_boxes.get(file.name, [])
         parsed_results = []
@@ -270,7 +266,7 @@ if uploaded_files:
                 st.image(resize_for_preview(preview_image), caption="🖍️ Layout Preview (Validated)", use_column_width=True)
 
             if st.button(f"🔍 Run OCR for Form {i+1}", key=f"ocr_btn_{file.name}_{i}"):
-                config = {}  # Replace with docai_config if needed
+                config = docai_config if use_docai else {}
                 result = process_single_form(form_crop, i, config, layout)
                 parsed_results.append(result)
 
