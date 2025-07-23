@@ -76,6 +76,99 @@ st.sidebar.markdown("### 🧠 OCR Engine")
 ocr_engine = st.sidebar.radio("Choose OCR Engine", ["Vision API", "Document AI"])
 use_docai = ocr_engine == "Document AI"
 
+# === Profile Management ===
+CONFIG_DIR = "config"
+ENC_PATH = os.path.join(CONFIG_DIR, "processor_config.enc")
+LAST_PATH = os.path.join(CONFIG_DIR, "last_profile.txt")
+KEY_PATH = os.path.join(CONFIG_DIR, "key.txt")
+os.makedirs(CONFIG_DIR, exist_ok=True)
+
+if not os.path.exists(KEY_PATH):
+    key = Fernet.generate_key()
+    open(KEY_PATH, "wb").write(key)
+else:
+    key = open(KEY_PATH, "rb").read()
+fernet = Fernet(key)
+
+saved_profiles = {}
+if os.path.exists(ENC_PATH):
+    try:
+        decrypted = fernet.decrypt(open(ENC_PATH, "rb").read()).decode()
+        saved_profiles = json.loads(decrypted)
+    except:
+        saved_profiles = {}
+
+default_profile = ""
+if os.path.exists(LAST_PATH):
+    default_profile = open(LAST_PATH).read().strip()
+
+profile_names = list(saved_profiles.keys())
+selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + ["New Profile"],
+    index=profile_names.index(default_profile) if default_profile in profile_names else len(profile_names)
+)
+
+if selected_profile == "New Profile":
+    st.sidebar.markdown("### ➕ Create New Profile")
+    new_name = st.sidebar.text_input("Profile Name")
+    project_id = st.sidebar.text_input("Project ID")
+    location = st.sidebar.text_input("Location")
+    processor_id = st.sidebar.text_input("Processor ID")
+
+    def save_profile(name, proj, loc, proc):
+        saved_profiles[name] = {
+            "project_id": proj.strip(),
+            "location": loc.strip(),
+            "processor_id": proc.strip()
+        }
+        encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
+        open(ENC_PATH, "wb").write(encrypted)
+        open(LAST_PATH, "w").write(name)
+        st.sidebar.success(f"✅ Profile `{name}` saved.")
+        st.experimental_rerun()
+
+    if st.sidebar.button("💾 Save Profile"):
+        if new_name and project_id and location and processor_id:
+            save_profile(new_name, project_id, location, processor_id)
+        else:
+            st.sidebar.error("⚠️ Please fill in all fields.")
+
+    st.sidebar.markdown("### 📋 Paste Profile JSON")
+    pasted_json = st.sidebar.text_area("Paste JSON", height=100)
+    if st.sidebar.button("📥 Load from Paste"):
+        try:
+            data = json.loads(pasted_json)
+            save_profile(new_name, data.get("project_id", ""), data.get("location", ""), data.get("processor_id", ""))
+        except:
+            st.sidebar.error("❌ Invalid JSON format.")
+
+    uploaded_profile = st.sidebar.file_uploader("Upload Profile JSON", type=["json"])
+    if uploaded_profile:
+        try:
+            data = json.load(uploaded_profile)
+            save_profile(new_name, data.get("project_id", ""), data.get("location", ""), data.get("processor_id", ""))
+        except:
+            st.sidebar.error("❌ Failed to parse uploaded profile.")
+else:
+    profile = saved_profiles.get(selected_profile) or {}
+    if all(k in profile for k in ["project_id", "location", "processor_id"]):
+        st.sidebar.markdown(f"### 📁 Profile: `{selected_profile}`")
+        st.sidebar.text(f"Project ID: {profile['project_id']}")
+        st.sidebar.text(f"Location: {profile['location']}")
+        st.sidebar.text(f"Processor ID: {profile['processor_id']}")
+        docai_config = profile
+        open(LAST_PATH, "w").write(selected_profile)
+    else:
+        st.sidebar.warning("⚠️ Selected profile is incomplete.")
+        docai_config = {}
+
+    if st.sidebar.button("🗑️ Delete Profile"):
+        del saved_profiles[selected_profile]
+        encrypted = fernet.encrypt(json.dumps(saved_profiles).encode())
+        open(ENC_PATH, "wb").write(encrypted)
+        open(LAST_PATH, "w").write("")
+        st.sidebar.success(f"🗑️ Profile `{selected_profile}` deleted.")
+        st.experimental_rerun()
+
 # === Image Settings ===
 st.sidebar.markdown("### 🖼️ Image Settings")
 use_adaptive_trim = st.sidebar.checkbox("Use Adaptive Trimming", value=True)
