@@ -119,6 +119,14 @@ else:
         st.sidebar.text(f"Processor ID: {profile['processor_id']}")
         docai_config = profile
         open(LAST_PATH, "w").write(selected_profile)
+        # === Save profile as downloadable JSON ===
+        profile_json = json.dumps(profile, indent=2)
+        st.sidebar.download_button(
+            label="💾 Export Profile JSON",
+            data=profile_json,
+            file_name=f"{selected_profile}_profile.json",
+            mime="application/json"
+        )
     else:
         st.sidebar.warning("⚠️ Selected profile is incomplete.")
         docai_config = {}
