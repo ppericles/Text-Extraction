@@ -1,9 +1,9 @@
 # =============================================================================
 # FILE: app.py
-# VERSION: 5.0.0
+# VERSION: 5.1.0
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Registry Form Parser with Document AI support,
-#              interactive cropping, layout overlays, and export.
+#              interactive cropping, layout refinement, overlays, and export.
 # =============================================================================
 
 import streamlit as st
@@ -12,6 +12,8 @@ import os, json, tempfile
 from cryptography.fernet import Fernet
 from utils_image import trim_whitespace, resize_for_preview
 from utils_layout import auto_detect_layout, draw_layout_overlay
+from utils_ocr import form_parser_ocr, vision_api_ocr_boxes, documentai_ocr_boxes
+from utils_refine import refine_layout_with_zones, export_layout_json
 from image_cropper import crop_and_confirm_forms, draw_zone_overlay
 
 # === UI Setup ===
@@ -34,6 +36,7 @@ else:
 st.sidebar.markdown("### 🧠 OCR Engine")
 ocr_engine = st.sidebar.radio("Choose OCR Engine", ["Vision API", "Document AI"])
 use_docai = ocr_engine == "Document AI"
+manual_split = st.sidebar.checkbox("Enable Manual Zone Splitting", value=False)
 
 # === Document AI Profile Management ===
 CONFIG_DIR = "config"
@@ -127,7 +130,6 @@ else:
         open(LAST_PATH, "w").write("")
         st.sidebar.success(f"🗑️ Profile `{selected_profile}` deleted.")
         st.experimental_rerun()
-
 # === File Upload ===
 uploaded_files = st.file_uploader("📤 Upload Registry Scans", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 if uploaded_files:
@@ -144,11 +146,19 @@ if uploaded_files:
 
             clean = trim_whitespace(img)
 
-            # === Auto-detect layout
-            layout = auto_detect_layout(clean)
+            # === OCR Box Extraction
+            if use_docai and docai_config:
+                response = form_parser_ocr(clean, **docai_config)
+                boxes, _ = documentai_ocr_boxes(response, clean)
+            else:
+                boxes = vision_api_ocr_boxes(clean)
 
-            # === Preview auto-detected layout
-            st.image(resize_for_preview(draw_layout_overlay(clean.copy(), layout)), caption="🔍 Auto-detected Layout", use_column_width=True)
+            # === Auto Layout Detection
+            layout = auto_detect_layout(clean, use_docai=use_docai, config=docai_config)
+
+            # === Refine Layout Zones
+            layout, overlay = refine_layout_with_zones(layout, boxes, clean, manual=manual_split, form_id=form_id)
+            st.image(resize_for_preview(overlay), caption="🧠 Refined Layout Zones", use_column_width=True)
 
             # === Manual adjustment toggle
             if st.checkbox("🛠️ Adjust layout manually", key=f"manual_toggle_{form_id}"):
@@ -162,9 +172,11 @@ if uploaded_files:
                     return [x1, y1, x2, y2]
 
                 layout["master_box"] = slider_box("Master", layout.get("master_box", [0.0, 0.0, 1.0, 0.5]))
-                layout["group_a_box"] = slider_box("Group A", layout.get("group_a_box", [0.0, 0.0, 0.5, 0.5]))
-                layout["group_b_box"] = slider_box("Group B", layout.get("group_b_box", [0.5, 0.0, 1.0, 0.5]))
+                layout["group_a_box"] = slider_box("Group A", layout.get("group_a_box", [0.0, 0.0, 1.0, 0.25]))
+                layout["group_b_box"] = slider_box("Group B", layout.get("group_b_box", [0.0, 0.25, 1.0, 0.5]))
                 layout["detail_box"] = slider_box("Detail", layout.get("detail_box", [0.0, 0.5, 1.0, 1.0]))
+                layout["detail_top_box"] = slider_box("Detail Top", layout.get("detail_top_box", [0.0, 0.5, 1.0, 0.75]))
+                layout["detail_bottom_box"] = slider_box("Detail Bottom", layout.get("detail_bottom_box", [0.0, 0.75, 1.0, 1.0]))
 
                 st.image(resize_for_preview(draw_layout_overlay(clean.copy(), layout)), caption="🖍️ Adjusted Layout", use_column_width=True)
 
@@ -172,5 +184,4 @@ if uploaded_files:
             draw_zone_overlay(clean, layout, form_id)
 
             # === Export layout
-            layout_json = json.dumps(layout, indent=2)
-            st.download_button("💾 Download Layout JSON", layout_json, file_name=f"{form_id}_layout.json")
+            export_layout_json(layout, form_id)
