@@ -180,109 +180,135 @@ if "parsed_forms" not in st.session_state:
 # === Main Processing Loop ===
 if uploaded_files:
     for file in uploaded_files:
-        st.header(f"📄 `{file.name}` — Select Forms")
+        base_name = file.name.replace(".", "_")
+        st.header(f"📄 `{file.name}` — Crop & Parse")
 
-        try:
-            image_raw = Image.open(file).convert("RGB")
-            processed = trim_whitespace(image_raw.copy())
-            preview_img = resize_for_preview(processed)
-            st.image(preview_img, caption="Preview Image", use_column_width=True)
-        except Exception as e:
-            st.error(f"❌ Failed to process or preview image: {e}")
-            continue
+        image = Image.open(file).convert("RGB")
+        confirmed_forms = crop_and_confirm_forms(image, max_crops=5)
 
-        # === Canvas Drawing Mode ===
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🖊️ Draw New Boxes", key=f"btn_draw_{file.name}"):
-                st.session_state[f"drawing_mode_{file.name}"] = "rect"
-        with col2:
-            if st.button("🔧 Resize / Move Boxes", key=f"btn_edit_{file.name}"):
-                st.session_state[f"drawing_mode_{file.name}"] = "transform"
+        for idx, img in enumerate(confirmed_forms, start=1):
+            form_id = f"{base_name}_form_{idx}"
+            st.subheader(f"🧾 Form `{form_id}`")
 
-        drawing_mode = st.session_state.get(f"drawing_mode_{file.name}", "rect")
-        scale_factor = 1.0 / (processed.width / preview_img.width)
-        canvas_json = convert_boxes_to_canvas_objects(
-            st.session_state.saved_boxes.get(file.name, []),
-            scale=scale_factor
-        )
+            clean = trim_whitespace(img)
 
-        canvas_result = st_canvas(
-            background_image=preview_img,
-            initial_drawing=canvas_json,
-            drawing_mode=drawing_mode,
-            display_toolbar=True,
-            fill_color="rgba(255, 0, 0, 0.3)",
-            stroke_width=2,
-            height=preview_img.height,
-            width=preview_img.width,
-            update_streamlit=True,
-            key=f"canvas_{file.name}"
-        )
+            slider_key = f"split_slider_{form_id}"
+            if slider_key not in st.session_state:
+                st.session_state[slider_key] = 0.5
+            master_ratio = st.slider(
+                "Adjust vertical split",
+                0.0, 1.0,
+                value=st.session_state[slider_key],
+                step=0.01,
+                key=slider_key
+            )
 
-        updated_boxes = []
-        if canvas_result and canvas_result.json_data:
-            scale_x = processed.width / preview_img.width
-            scale_y = processed.height / preview_img.height
-            for obj in canvas_result.json_data.get("objects", []):
+            zones, bounds = split_zones_fixed(clean, master_ratio=master_ratio)
+            preview = draw_zones_overlays(clean, bounds)
+            st.image(resize_for_preview(preview), caption=f"📐 Zones for `{form_id}`", use_column_width=True)
+
+            layout_dicts = {}
+            save_dir = "saved-layouts"
+            os.makedirs(save_dir, exist_ok=True)
+
+            for zid in ["1", "2"]:
+                st.markdown(f"### 🧱 Zone {zid} Layout Editor")
+                zone_img = zones[int(zid) - 1]
+
+                if not isinstance(zone_img, Image.Image) or zone_img.size == (0, 0):
+                    zone_img = get_fallback_image(text=f"Zone {zid} unavailable")
+
+                zone_img = zone_img.convert("RGB")
+
                 try:
-                    x1 = int(obj["left"] * scale_x)
-                    y1 = int(obj["top"] * scale_y)
-                    x2 = int((obj["left"] + obj["width"]) * scale_x)
-                    y2 = int((obj["top"] + obj["height"]) * scale_y)
-                    updated_boxes.append((x1, y1, x2, y2))
+                    canvas_result = st_canvas(
+                        fill_color="rgba(0, 255, 0, 0.3)",
+                        stroke_width=3,
+                        background_image=zone_img,
+                        update_streamlit=True,
+                        height=zone_img.size[1],
+                        width=zone_img.size[0],
+                        drawing_mode="rect",
+                        key=f"canvas_{form_id}_{zid}"
+                    )
+
+                    def convert_to_layout_dict(objects, image_size):
+                        layout = {}
+                        w, h = image_size
+                        for i, obj in enumerate(objects):
+                            if obj["type"] == "rect":
+                                left = obj["left"] / w
+                                top = obj["top"] / h
+                                width = obj["width"] / w
+                                height = obj["height"] / h
+                                layout[f"field_{i}"] = [left, top, left + width, top + height]
+                        return layout
+
+                    if canvas_result.json_data and "objects" in canvas_result.json_data:
+                        layout_dict = convert_to_layout_dict(canvas_result.json_data["objects"], zone_img.size)
+                        layout_dicts[zid] = layout_dict
+
+                        overlay = draw_layout_overlay(zone_img, layout_dict)
+                        st.image(resize_for_preview(overlay), caption=f"🔍 Zone {zid} Overlay", use_column_width=True)
+
+                        json_str = json.dumps(layout_dict, indent=2)
+                        json_path = f"{save_dir}/{form_id}_zone_{zid}_layout.json"
+                        with open(json_path, "w") as f:
+                            f.write(json_str)
+                        st.download_button(f"💾 Download Layout JSON", json_str, file_name=os.path.basename(json_path))
+                        st.sidebar.success(f"📝 Layout saved: `{json_path}`")
+
+                        debug_overlay = draw_invalid_boxes_overlay(zone_img, layout_dict)
+                        st.image(resize_for_preview(debug_overlay), caption=f"🚨 Invalid Fields in Zone {zid}", use_column_width=True)
+
                 except Exception as e:
-                    st.warning(f"⚠️ Could not convert box: {e}")
+                    st.warning(f"⚠️ Canvas failed with error: {e}. Switching to slider editor.")
 
-            update_boxes_if_changed(file.name, updated_boxes)
+                    field_count = st.number_input(f"Number of fields in Zone {zid}", min_value=1, max_value=10, value=3, key=f"field_count_{form_id}_{zid}")
+                    layout_dict = {}
 
-        form_boxes = st.session_state.saved_boxes.get(file.name, [])
-        parsed_results = []
+                    for i in range(field_count):
+                        st.markdown(f"🧩 Field {i + 1}")
+                        x1 = st.slider(f"x1 (left)", 0.0, 1.0, 0.05, 0.01, key=f"x1_{form_id}_{zid}_{i}")
+                        y1 = st.slider(f"y1 (top)", 0.0, 1.0, 0.05, 0.01, key=f"y1_{form_id}_{zid}_{i}")
+                        x2 = st.slider(f"x2 (right)", x1 + 0.01, 1.0, x1 + 0.3, 0.01, key=f"x2_{form_id}_{zid}_{i}")
+                        y2 = st.slider(f"y2 (bottom)", y1 + 0.01, 1.0, y1 + 0.1, 0.01, key=f"y2_{form_id}_{zid}_{i}")
+                        layout_dict[f"field_{i}"] = [x1, y1, x2, y2]
 
-        for i, box in enumerate(form_boxes):
-            x1, y1, x2, y2 = box
-            form_crop = processed.crop((x1, y1, x2, y2))
-            st.subheader(f"🧾 Form {i+1}")
-            st.image(resize_for_preview(form_crop), caption="📄 Cropped Form", use_column_width=True)
+                    layout_dicts[zid] = layout_dict
 
-            layout = {
-                "master_ratio": 0.5,
-                "group_a_box": [0.0, 0.0, 0.2, 1.0],
-                "group_b_box": [0.2, 0.0, 1.0, 0.5],
-                "detail_box": [0.0, 0.0, 1.0, 1.0],
-                "auto_detect": True
-            }
+                    overlay = draw_layout_overlay(zone_img, layout_dict)
+                    st.image(resize_for_preview(overlay), caption=f"🔍 Manual Layout Preview", use_column_width=True)
 
-            st.image(resize_for_preview(draw_layout_overlay(form_crop, layout)), caption="🔍 Layout Overlay", use_column_width=True)
+                    json_str = json.dumps(layout_dict, indent=2)
+                    st.download_button(f"💾 Download Manual Layout JSON", json_str, file_name=f"{form_id}_zone_{zid}_layout_manual.json", mime="application/json")
 
-            if st.checkbox("🔬 Show layout preview with dummy box detection", key=f"preview_{file.name}_{i}"):
-                layout_preview = {
-                    "group_a": {"box": layout.get("group_a_box")},
-                    "group_b": {"box": layout.get("group_b_box")},
-                    "detail_zone": {"box": layout.get("detail_box")}
-                }
-                layout_preview = validate_layout_for_preview(layout_preview, form_crop.width, form_crop.height)
-                preview_image = draw_layout_overlay_preview(form_crop.copy(), layout_preview)
-                st.image(resize_for_preview(preview_image), caption="🖍️ Layout Preview (Validated)", use_column_width=True)
+            ocr_traces = {}
+            trace = []
 
-            if st.button(f"🔍 Run OCR for Form {i+1}", key=f"ocr_btn_{file.name}_{i}"):
-                config = docai_config if use_docai else {}
-                result = process_single_form(form_crop, i, config, layout)
-                parsed_results.append(result)
+            for zid in ["1", "2", "3"]:
+                zone_img = zones[int(zid) - 1] if int(zid) - 1 < len(zones) else None
+                if zone_img is not None:
+                    if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
+                        zone_ocr = parse_zone_text(zone_img, engine="vision")
+                    else:
+                        zone_ocr = "⚠️ OCR skipped."
+                else:
+                    zone_ocr = f"⚠️ Zone {zid} missing."
+                trace.append(zone_ocr)
 
-                st.image(resize_for_preview(draw_column_breaks(result["table_crop"], result["column_breaks"])), caption="📊 Column Breaks", use_column_width=True)
-                st.image(resize_for_preview(draw_row_breaks(result["table_crop"], rows=10, header=True)), caption="📏 Row Breaks", use_column_width=True)
+            ocr_traces[form_id] = trace
 
-        st.session_state.parsed_forms[file.name] = parsed_results
+            extracted_fields = {}
+            for zid in ["1", "2"]:
+                zone_img = zones[int(zid) - 1]
+                layout = layout_dicts.get(zid, {})
+                fields = extract_fields_from_layout(zone_img, layout, engine="vision")
+                extracted_fields.update(fields)
 
-        st.markdown("## 📦 Export All Forms")
-        if st.button("📤 Export All Parsed Data", key=f"export_all_{file.name}"):
-            all_data = {
-                f"form_{i+1}": {
-                    "group_a": r["group_a"],
-                    "group_b": r["group_b"],
-                    "table_rows": r["table_rows"]
-                }
-                for i, r in enumerate(parsed_results)
-            }
-            st.download_button("📥 Download All Data", json.dumps(all_data, indent=2), file_name=f"{file.name}_all_forms.json")
+            st.markdown("### 🧾 Extracted Fields")
+            for label, value in extracted_fields.items():
+                st.text(f"{label}: {value}")
+
+            mock_rows = generate_mock_metadata_batch(layout_dicts, {}, count=1, placeholder="XXXX")
+            preview_metadata_row(mock_rows[0])
