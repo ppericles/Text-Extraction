@@ -1,10 +1,10 @@
 # =============================================================================
 # FILE: utils_layout.py
-# VERSION: 1.1
+# VERSION: 1.2
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Layout utilities for registry form parsing.
-#              Supports Vision API and Document AI OCR,
-#              confidence scoring, layout validation, and visual overlays.
+#              Includes layout validation, dummy box detection,
+#              and visual overlays for debugging and production.
 # =============================================================================
 
 from PIL import Image, ImageDraw, ImageFont
@@ -20,6 +20,9 @@ def extract_fields_from_layout(img: Image.Image, layout: dict, engine="vision", 
     results = {}
 
     for label, box in layout.items():
+        if not isinstance(box, (list, tuple)) or len(box) != 4:
+            continue
+
         x1, y1, x2, y2 = box
         left = int(x1 * w)
         top = int(y1 * h)
