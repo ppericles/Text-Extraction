@@ -177,7 +177,7 @@ if uploaded_files:
                     y1 = st.slider(f"{label} y1", 0.0, 1.0, default[1], 0.01, key=f"{form_id}_{label}_y1")
                     x2 = st.slider(f"{label} x2", x1 + 0.01, 1.0, default[2], 0.01, key=f"{form_id}_{label}_x2")
                     y2 = st.slider(f"{label} y2", y1 + 0.01, 1.0, default[3], 0.01, key=f"{form_id}_{label}_y2")
-                return [x1, y1, x2, y2]
+                    return [x1, y1, x2, y2]
 
             layout["master_box"] = slider_box("Master", layout.get("master_box", [0.0, 0.0, 1.0, 0.5]))
             layout["group_a_box"] = slider_box("Group A", layout.get("group_a_box", [0.0, 0.0, 1.0, 0.25]))
