@@ -25,6 +25,7 @@ from utils_layout import (
     draw_layout_overlay_preview
 )
 from utils_parser import process_single_form
+from form_cropper import crop_and_confirm_forms
 
 # === Helper: Update Boxes Safely ===
 def update_boxes_if_changed(file_key: str, new_boxes: list):
