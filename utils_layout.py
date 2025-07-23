@@ -55,6 +55,10 @@ def draw_layout_overlay(img: Image.Image, layout: dict) -> Image.Image:
     w, h = img.size
 
     for label, box in layout.items():
+        if not isinstance(box, (list, tuple)) or len(box) != 4:
+            print(f"⚠️ Skipping invalid box for '{label}': {box}")
+            continue
+
         x1, y1, x2, y2 = box
         left = int(x1 * w)
         top = int(y1 * h)
