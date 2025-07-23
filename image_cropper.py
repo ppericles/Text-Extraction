@@ -31,6 +31,10 @@ def crop_and_confirm_forms(image: Image.Image, max_crops=5) -> list:
             realtime_update=True
         )
 
+        # === Live preview of cropped region
+        st.image(cropped_img, caption=f"🔍 Preview Crop {i+1}", use_column_width=True)
+        # === Confirm crop
+
         if st.button(f"✅ Confirm Crop {i+1}"):
             confirmed.append(cropped_img)
             st.image(cropped_img, caption=f"🧾 Cropped Form {i+1}", use_column_width=True)
