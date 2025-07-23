@@ -1,9 +1,9 @@
 # =============================================================================
 # FILE: image_cropper.py
-# VERSION: 1.2
+# VERSION: 1.3
 # AUTHOR: Pericles & Copilot
 # DESCRIPTION: Interactive cropping and layout zone visualization.
-#              Uses st_cropper with zoom support for precision selection.
+#              Uses st_cropper for drag-based selection and preview.
 # =============================================================================
 
 import streamlit as st
@@ -14,7 +14,7 @@ from streamlit_cropper import st_cropper
 def crop_and_confirm_forms(image: Image.Image, max_crops=5) -> list:
     """
     Allows user to interactively crop multiple regions from the image.
-    Includes zoom slider for precision. Returns list of confirmed cropped images.
+    Returns list of confirmed cropped form images.
     """
     st.markdown("### ✂️ Crop Forms from Image")
     confirmed = []
@@ -22,18 +22,13 @@ def crop_and_confirm_forms(image: Image.Image, max_crops=5) -> list:
     for i in range(max_crops):
         st.markdown(f"#### Crop Region {i+1}")
 
-        zoom = st.slider(f"🔍 Zoom Level {i+1}", 0.5, 3.0, 1.0, 0.1, key=f"zoom_{i}")
-
         cropped_img = st_cropper(
             image,
             box_color="blue",
             aspect_ratio=None,
             return_type="image",
             key=f"crop_{i}",
-            realtime_update=True,
-            box_algorithm="zoom",
-            crop_box_mode="manual",
-            zoom=zoom
+            realtime_update=True
         )
 
         if st.button(f"✅ Confirm Crop {i+1}"):
