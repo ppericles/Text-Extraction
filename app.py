@@ -1,12 +1,13 @@
-# ============================================================
+# =============================================================================
 # FILE: app.py
-# VERSION: 3.7.15
+# VERSION: 3.8.0
+# AUTHOR: Pericles & Copilot
 # DESCRIPTION: Streamlit-based Registry Form Parser with
 #              interactive canvas drawing, multi-profile
 #              config encryption, Google OCR (Vision API or
 #              Document AI), layout overlays, batch export,
-#              and resilience against rendering errors.
-# ============================================================
+#              and layout preview with dummy box detection.
+# =============================================================================
 
 import streamlit as st
 from PIL import Image
@@ -22,7 +23,11 @@ from utils_image import (
     draw_column_breaks,
     draw_row_breaks
 )
-from utils_layout import draw_layout_overlay
+from utils_layout import (
+    draw_layout_overlay,
+    validate_layout_for_preview,
+    draw_layout_overlay_preview
+)
 from utils_parser import process_single_form
 
 def convert_boxes_to_canvas_objects(boxes, scale=1.0):
@@ -50,9 +55,11 @@ def convert_boxes_to_canvas_objects(boxes, scale=1.0):
         st.warning(f"⚠️ Box conversion error: {e}")
         return {"objects": []}
 
+# === UI Setup ===
 st.set_page_config(page_title="📄 Registry Parser", layout="wide")
 st.title("📄 Registry Form Parser")
 
+# === Credential Loading ===
 st.sidebar.markdown("### 🔐 Load Google Credentials")
 cred_file = st.sidebar.file_uploader("Upload JSON credentials", type=["json"])
 if cred_file:
@@ -64,10 +71,12 @@ if cred_file:
 else:
     st.sidebar.warning("⚠️ OCR disabled — upload service account JSON.")
 
+# === OCR Engine Selection ===
 st.sidebar.markdown("### 🧠 OCR Engine")
 ocr_engine = st.sidebar.radio("Choose OCR Engine", ["Vision API", "Document AI"])
 use_docai = ocr_engine == "Document AI"
 
+# === Profile Management ===
 CONFIG_DIR = "config"
 ENC_PATH = os.path.join(CONFIG_DIR, "processor_config.enc")
 LAST_PATH = os.path.join(CONFIG_DIR, "last_profile.txt")
@@ -97,7 +106,7 @@ profile_names = list(saved_profiles.keys())
 selected_profile = st.sidebar.selectbox("🔖 Select Profile", profile_names + ["New Profile"],
     index=profile_names.index(default_profile) if default_profile in profile_names else len(profile_names)
 )
-# === Profile Management ===
+
 if selected_profile == "New Profile":
     st.sidebar.markdown("### ➕ Create New Profile")
     new_name = st.sidebar.text_input("Profile Name")
@@ -173,6 +182,7 @@ if "saved_boxes" not in st.session_state:
 if "parsed_forms" not in st.session_state:
     st.session_state.parsed_forms = {}
 
+# === Main Processing Loop ===
 if uploaded_files:
     for file in uploaded_files:
         if file.name not in st.session_state.saved_boxes:
@@ -190,7 +200,6 @@ if uploaded_files:
 
         # === Bounding Box Editor UI ===
         st.markdown("### ✏️ Bounding Box Editor")
-
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🖊️ Draw New Boxes", key=f"btn_draw_{file.name}"):
@@ -217,74 +226,88 @@ if uploaded_files:
             drawing_mode=drawing_mode,
             display_toolbar=True,
             fill_color="rgba(255, 0, 0, 0.3)",
-            stroke_width=2,
-            height=preview_img.height,
-            width=preview_img.width,
-            update_streamlit=True,
-            key=f"canvas_{file.name}"
-        )
+    stroke_width=2,
+    height=preview_img.height,
+    width=preview_img.width,
+    update_streamlit=True,
+    key=f"canvas_{file.name}"
+)
 
-        updated_boxes = []
-        if canvas_result and canvas_result.json_data:
-            scale_x = processed.width / preview_img.width
-            scale_y = processed.height / preview_img.height
-            for obj in canvas_result.json_data.get("objects", []):
-                try:
-                    x1 = int(obj["left"] * scale_x)
-                    y1 = int(obj["top"] * scale_y)
-                    x2 = int((obj["left"] + obj["width"]) * scale_x)
-                    y2 = int((obj["top"] + obj["height"]) * scale_y)
-                    updated_boxes.append((x1, y1, x2, y2))
-                except Exception as e:
-                    st.warning(f"⚠️ Could not convert box: {e}")
-            st.session_state.saved_boxes[file.name] = updated_boxes
-        form_boxes = st.session_state.saved_boxes.get(file.name, [])
-        parsed_results = []
+updated_boxes = []
+if canvas_result and canvas_result.json_data:
+    scale_x = processed.width / preview_img.width
+    scale_y = processed.height / preview_img.height
+    for obj in canvas_result.json_data.get("objects", []):
+        try:
+            x1 = int(obj["left"] * scale_x)
+            y1 = int(obj["top"] * scale_y)
+            x2 = int((obj["left"] + obj["width"]) * scale_x)
+            y2 = int((obj["top"] + obj["height"]) * scale_y)
+            updated_boxes.append((x1, y1, x2, y2))
+        except Exception as e:
+            st.warning(f"⚠️ Could not convert box: {e}")
+    st.session_state.saved_boxes[file.name] = updated_boxes
 
-        for i, box in enumerate(form_boxes):
-            x1, y1, x2, y2 = box
-            form_crop = processed.crop((x1, y1, x2, y2))
-            st.subheader(f"🧾 Form {i+1}")
-            st.image(resize_for_preview(form_crop), caption="📄 Cropped Form", use_column_width=True)
+form_boxes = st.session_state.saved_boxes.get(file.name, [])
+parsed_results = []
 
-            st.markdown("### 🧩 Layout Settings")
-            auto = st.checkbox("Auto-detect table columns", value=True, key=f"auto_{i}")
-            layout = {
-                "master_ratio": 0.5,
-                "group_a_box": [0.0, 0.0, 0.2, 1.0],
-                "group_b_box": [0.2, 0.0, 1.0, 0.5],
-                "detail_box": [0.0, 0.0, 1.0, 1.0],
-                "auto_detect": auto
-            }
+for i, box in enumerate(form_boxes):
+    x1, y1, x2, y2 = box
+    form_crop = processed.crop((x1, y1, x2, y2))
+    st.subheader(f"🧾 Form {i+1}")
+    st.image(resize_for_preview(form_crop), caption="📄 Cropped Form", use_column_width=True)
 
-            if not auto:
-                table_columns = []
-                for c in range(6):
-                    cx1 = st.slider(f"Column {c+1} - X1", 0.0, 1.0, c * 0.15, 0.01, key=f"cx1_{i}_{c}")
-                    cx2 = st.slider(f"Column {c+1} - X2", 0.0, 1.0, (c + 1) * 0.15, 0.01, key=f"cx2_{i}_{c}")
-                    table_columns.append((cx1, cx2))
-                layout["table_columns"] = table_columns
+    st.markdown("### 🧩 Layout Settings")
+    auto = st.checkbox("Auto-detect table columns", value=True, key=f"auto_{i}")
+    layout = {
+        "master_ratio": 0.5,
+        "group_a_box": [0.0, 0.0, 0.2, 1.0],
+        "group_b_box": [0.2, 0.0, 1.0, 0.5],
+        "detail_box": [0.0, 0.0, 1.0, 1.0],
+        "auto_detect": auto
+    }
 
-            config = docai_config if use_docai else {}
-            result = process_single_form(form_crop, i, config, layout)
-            parsed_results.append(result)
+    if not auto:
+        table_columns = []
+        for c in range(6):
+            cx1 = st.slider(f"Column {c+1} - X1", 0.0, 1.0, c * 0.15, 0.01, key=f"cx1_{i}_{c}")
+            cx2 = st.slider(f"Column {c+1} - X2", 0.0, 1.0, (c + 1) * 0.15, 0.01, key=f"cx2_{i}_{c}")
+            table_columns.append((cx1, cx2))
+        layout["table_columns"] = table_columns
 
-            st.image(resize_for_preview(draw_layout_overlay(form_crop, layout)), caption="🔍 Layout Overlay", use_column_width=True)
-            st.image(resize_for_preview(draw_column_breaks(result["table_crop"], result["column_breaks"])), caption="📊 Column Breaks", use_column_width=True)
-            st.image(resize_for_preview(draw_row_breaks(result["table_crop"], rows=10, header=True)), caption="📏 Row Breaks", use_column_width=True)
-        st.session_state.parsed_forms[file.name] = parsed_results
+    config = docai_config if use_docai else {}
+    result = process_single_form(form_crop, i, config, layout)
+    parsed_results.append(result)
 
-        st.markdown("## 📦 Export All Forms")
-        if st.button("📤 Export All Parsed Data", key=f"export_all_{file.name}"):
-            all_data = {
-                f"form_{i+1}": {
-                    "group_a": r["group_a"],
-                    "group_b": r["group_b"],
-                    "table_rows": r["table_rows"]
-                }
-                for i, r in enumerate(parsed_results)
-            }
-            st.download_button("📥 Download All Data", json.dumps(all_data, indent=2), file_name=f"{file.name}_all_forms.json")
+    st.image(resize_for_preview(draw_layout_overlay(form_crop, layout)), caption="🔍 Layout Overlay", use_column_width=True)
+
+    # 🖍️ Optional: Preview Layout with Dummy Box Detection
+    if st.checkbox("🔬 Show layout preview with dummy box detection", key=f"preview_{file.name}_{i}"):
+        layout_preview = {
+            "group_a": {"box": layout.get("group_a_box")},
+            "group_b": {"box": layout.get("group_b_box")},
+            "detail_zone": {"box": layout.get("detail_box")}
+        }
+        layout_preview = validate_layout_for_preview(layout_preview, form_crop.width, form_crop.height)
+        preview_image = draw_layout_overlay_preview(form_crop.copy(), layout_preview)
+        st.image(resize_for_preview(preview_image), caption="🖍️ Layout Preview (Validated)", use_column_width=True)
+
+    st.image(resize_for_preview(draw_column_breaks(result["table_crop"], result["column_breaks"])), caption="📊 Column Breaks", use_column_width=True)
+    st.image(resize_for_preview(draw_row_breaks(result["table_crop"], rows=10, header=True)), caption="📏 Row Breaks", use_column_width=True)
+
+st.session_state.parsed_forms[file.name] = parsed_results
+
+st.markdown("## 📦 Export All Forms")
+if st.button("📤 Export All Parsed Data", key=f"export_all_{file.name}"):
+    all_data = {
+        f"form_{i+1}": {
+            "group_a": r["group_a"],
+            "group_b": r["group_b"],
+            "table_rows": r["table_rows"]
+        }
+        for i, r in enumerate(parsed_results)
+    }
+    st.download_button("📥 Download All Data", json.dumps(all_data, indent=2), file_name=f"{file.name}_all_forms.json")
 
 # === Batch OCR with Progress Bar ===
 if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
@@ -318,6 +341,18 @@ if st.button("🚀 Run Batch OCR on All Files", key="run_batch_ocr"):
                 config = docai_config if use_docai else {}
                 result = process_single_form(form_crop, i, config, layout)
                 parsed_results.append(result)
+
+                # 🖍️ Optional: Preview Layout with Dummy Box Detection (Batch Mode)
+                if st.checkbox(f"🔬 Preview layout for form {i+1} in `{file.name}`", key=f"batch_preview_{file.name}_{i}"):
+                    layout_preview = {
+                        "group_a": {"box": layout.get("group_a_box")},
+                        "group_b": {"box": layout.get("group_b_box")},
+                        "detail_zone": {"box": layout.get("detail_box")}
+                    }
+                    layout_preview = validate_layout_for_preview(layout_preview, form_crop.width, form_crop.height)
+                    preview_image = draw_layout_overlay_preview(form_crop.copy(), layout_preview)
+                    st.image(resize_for_preview(preview_image), caption=f"🖍️ Layout Preview — Form {i+1}", use_column_width=True)
+
             except Exception as e:
                 st.warning(f"⚠️ Error parsing form {i+1} in `{file.name}`: {e}")
 
